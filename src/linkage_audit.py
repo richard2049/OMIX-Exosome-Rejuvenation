@@ -1,0 +1,257 @@
+"""
+linkage_audit.py
+
+Utilities to assess whether primate bulk metadata can be linked to plasma
+metadata at the animal level, and to build a strict estimability gate for
+downstream mediation/decomposition analyses.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Sequence
+
+import pandas as pd
+
+
+def _mode_or_first(s: pd.Series) -> str:
+    s = s.dropna().astype(str)
+    if s.empty:
+        return ""
+    m = s.mode()
+    if m.empty:
+        return str(s.iloc[0])
+    return str(m.iloc[0])
+
+
+def _canonical_group_label(x: Any) -> str:
+    s = str(x).strip().upper()
+    if s.startswith("O_"):
+        return s.split("_", 1)[1]
+    if s.endswith("_C"):
+        return "C"
+    if s in {"CTRL", "CONTROL"}:
+        return "C"
+    return s
+
+
+def audit_primate_plasma_linkage(
+    prim_meta: pd.DataFrame,
+    prim_plasma_meta: pd.DataFrame,
+    animal_col: str = "animal_id",
+    group_col: str = "group",
+    sex_col: str = "sex",
+    animal_confidence_col: str = "animal_id_confidence",
+    high_conf_values: Sequence[str] = ("high", "metadata", "metadata_exact"),
+    treated_label: str = "O_GES",
+    control_labels: Sequence[str] = ("O_V", "O_WT"),
+) -> Dict[str, Any]:
+    n_prim_samples = int(len(prim_meta))
+    n_plasma_samples = int(len(prim_plasma_meta))
+
+    has_prim_animal_col = animal_col in prim_meta.columns
+    has_plasma_animal_col = animal_col in prim_plasma_meta.columns
+
+    prim_non_null = 0
+    plasma_non_null = 0
+    prim_ids = set()
+    plasma_ids = set()
+
+    if has_prim_animal_col:
+        prim_vals = prim_meta[animal_col].dropna().astype(str)
+        prim_non_null = int(prim_vals.shape[0])
+        prim_ids = set(prim_vals.tolist())
+
+    if has_plasma_animal_col:
+        plasma_vals = prim_plasma_meta[animal_col].dropna().astype(str)
+        plasma_non_null = int(plasma_vals.shape[0])
+        plasma_ids = set(plasma_vals.tolist())
+
+    high_conf_set = {str(x).strip().lower() for x in high_conf_values}
+    n_plasma_high_conf_non_null = 0
+    overlap_high_conf_ids = set()
+    n_overlap_treated = 0
+    n_overlap_control = 0
+    mapping_coverage = 0.0
+
+    if has_plasma_animal_col and animal_confidence_col in prim_plasma_meta.columns:
+        plasma_conf = (
+            prim_plasma_meta[animal_confidence_col]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .isin(high_conf_set)
+        )
+        plasma_hc_vals = prim_plasma_meta.loc[plasma_conf, animal_col].dropna().astype(str)
+        n_plasma_high_conf_non_null = int(plasma_hc_vals.shape[0])
+        plasma_hc_ids = set(plasma_hc_vals.tolist())
+    elif has_plasma_animal_col:
+        # Backward-compatible fallback: treat any non-null animal_id as high-confidence.
+        plasma_hc_ids = set(plasma_ids)
+        n_plasma_high_conf_non_null = int(plasma_non_null)
+    else:
+        plasma_hc_ids = set()
+
+    overlap_high_conf_ids = prim_ids.intersection(plasma_hc_ids)
+    n_overlap_high_conf = int(len(overlap_high_conf_ids))
+    mapping_coverage = (
+        float(n_overlap_high_conf / n_plasma_samples) if n_plasma_samples > 0 else 0.0
+    )
+
+    if n_overlap_high_conf > 0 and group_col in prim_meta.columns:
+        prim_group = (
+            prim_meta[[animal_col, group_col]]
+            .dropna()
+            .astype({animal_col: str})
+            .groupby(animal_col)[group_col]
+            .agg(_mode_or_first)
+        )
+        overlap_idx = prim_group.index.intersection(pd.Index(list(overlap_high_conf_ids)))
+        ctrl_set = {str(x) for x in control_labels}
+        n_overlap_treated = int((prim_group.loc[overlap_idx] == str(treated_label)).sum())
+        n_overlap_control = int(prim_group.loc[overlap_idx].isin(ctrl_set).sum())
+
+    overlap_ids = prim_ids.intersection(plasma_ids)
+    n_overlap = int(len(overlap_ids))
+
+    overlap_fraction_prim = float(n_overlap / len(prim_ids)) if prim_ids else 0.0
+    overlap_fraction_plasma = float(n_overlap / len(plasma_ids)) if plasma_ids else 0.0
+
+    group_concordance = float("nan")
+    sex_concordance = float("nan")
+
+    if n_overlap > 0 and group_col in prim_meta.columns and group_col in prim_plasma_meta.columns:
+        prim_group = (
+            prim_meta[[animal_col, group_col]]
+            .dropna()
+            .astype({animal_col: str})
+            .groupby(animal_col)[group_col]
+            .agg(_mode_or_first)
+        )
+        plasma_group = (
+            prim_plasma_meta[[animal_col, group_col]]
+            .dropna()
+            .astype({animal_col: str})
+            .groupby(animal_col)[group_col]
+            .agg(_mode_or_first)
+        )
+        common = prim_group.index.intersection(plasma_group.index)
+        if len(common) > 0:
+            pg = prim_group.loc[common].map(_canonical_group_label)
+            qg = plasma_group.loc[common].map(_canonical_group_label)
+            group_concordance = float((pg == qg).mean())
+
+    if n_overlap > 0 and sex_col in prim_meta.columns and sex_col in prim_plasma_meta.columns:
+        prim_sex = (
+            prim_meta[[animal_col, sex_col]]
+            .dropna()
+            .astype({animal_col: str})
+            .groupby(animal_col)[sex_col]
+            .agg(_mode_or_first)
+        )
+        plasma_sex = (
+            prim_plasma_meta[[animal_col, sex_col]]
+            .dropna()
+            .astype({animal_col: str})
+            .groupby(animal_col)[sex_col]
+            .agg(_mode_or_first)
+        )
+        common = prim_sex.index.intersection(plasma_sex.index)
+        if len(common) > 0:
+            sex_concordance = float((prim_sex.loc[common] == plasma_sex.loc[common]).mean())
+
+    return {
+        "available": True,
+        "n_prim_samples": n_prim_samples,
+        "n_plasma_samples": n_plasma_samples,
+        "has_prim_animal_id_col": bool(has_prim_animal_col),
+        "has_plasma_animal_id_col": bool(has_plasma_animal_col),
+        "has_plasma_animal_id_confidence_col": bool(animal_confidence_col in prim_plasma_meta.columns),
+        "n_prim_animal_id_non_null": prim_non_null,
+        "n_plasma_animal_id_non_null": plasma_non_null,
+        "n_plasma_high_conf_animal_id_non_null": n_plasma_high_conf_non_null,
+        "n_overlap_animal_ids": n_overlap,
+        "n_overlap_animal_ids_high_conf": n_overlap_high_conf,
+        "n_overlap_treated_animals": n_overlap_treated,
+        "n_overlap_control_animals": n_overlap_control,
+        "overlap_fraction_prim_animals": overlap_fraction_prim,
+        "overlap_fraction_plasma_animals": overlap_fraction_plasma,
+        "mapping_coverage": mapping_coverage,
+        "group_concordance_on_overlap": group_concordance,
+        "sex_concordance_on_overlap": sex_concordance,
+    }
+
+
+def build_estimability_report(
+    linkage_audit: Dict[str, Any],
+    min_samples_for_mediation: int = 12,
+    min_overlap_animals: int = 20,
+    min_treated_overlap: int = 6,
+    min_control_overlap: int = 12,
+) -> Dict[str, Any]:
+    has_prim = bool(linkage_audit.get("has_prim_animal_id_col", False))
+    has_plasma = bool(linkage_audit.get("has_plasma_animal_id_col", False))
+    n_overlap = int(
+        linkage_audit.get(
+            "n_overlap_animal_ids_high_conf",
+            linkage_audit.get("n_overlap_animal_ids", 0),
+        )
+        or 0
+    )
+    n_overlap_treated = int(linkage_audit.get("n_overlap_treated_animals", 0) or 0)
+    n_overlap_control = int(linkage_audit.get("n_overlap_control_animals", 0) or 0)
+
+    if not has_prim or not has_plasma:
+        tier = "unlinked"
+        can_do_mediation = False
+        reason = "animal_id column missing in bulk and/or plasma metadata."
+    elif n_overlap <= 0:
+        tier = "unlinked"
+        can_do_mediation = False
+        reason = "No overlapping high-confidence animal_id values across bulk and plasma metadata."
+    elif n_overlap < int(min_overlap_animals):
+        tier = "partially_linked"
+        can_do_mediation = False
+        reason = (
+            f"Only {n_overlap} overlapping high-confidence animals (< {int(min_overlap_animals)} "
+            "minimum required for linked analysis)."
+        )
+    elif n_overlap_treated < int(min_treated_overlap):
+        tier = "partially_linked"
+        can_do_mediation = False
+        reason = (
+            f"Only {n_overlap_treated} overlapping treated animals (< {int(min_treated_overlap)} "
+            "minimum required)."
+        )
+    elif n_overlap_control < int(min_control_overlap):
+        tier = "partially_linked"
+        can_do_mediation = False
+        reason = (
+            f"Only {n_overlap_control} overlapping control animals (< {int(min_control_overlap)} "
+            "minimum required)."
+        )
+    elif n_overlap < int(min_samples_for_mediation):
+        tier = "partially_linked"
+        can_do_mediation = False
+        reason = (
+            f"Only {n_overlap} overlapping animals (< {int(min_samples_for_mediation)} "
+            "minimum for stable mediation)."
+        )
+    else:
+        tier = "fully_linked"
+        can_do_mediation = True
+        reason = "Sufficient animal-level overlap for mediation/decomposition."
+
+    return {
+        "available": True,
+        "tier": tier,
+        "can_do_mediation": bool(can_do_mediation),
+        "can_do_linked_decomposition": bool(can_do_mediation),
+        "n_overlap_animal_ids": n_overlap,
+        "n_overlap_treated_animals": n_overlap_treated,
+        "n_overlap_control_animals": n_overlap_control,
+        "min_overlap_animals": int(min_overlap_animals),
+        "min_treated_overlap": int(min_treated_overlap),
+        "min_control_overlap": int(min_control_overlap),
+        "min_samples_for_mediation": int(min_samples_for_mediation),
+        "reason": reason,
+    }
