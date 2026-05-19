@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,8 @@ class PipelineConfig:
 
     # Core OMIX
     primate_bulk: OmixPaths
+    data_profile: str = "auto"
+    data_root: Optional[Path] = None
     primate_bulk_age_col = "age"
     primate_plasma: Optional[OmixPaths] = None
     primate_methylation: Optional[OmixPaths] = None
@@ -58,8 +60,26 @@ class PipelineConfig:
     enable_mediation: bool = True
     enable_causal_decomposition: bool = True
     # Optional modules flags
-    enable_methylation_block: bool = False
+    enable_methylation_block: bool = True
+    enable_mouse_exosome_block: bool = True
+    enable_subset_validation_block: bool = True
     enable_translation_module: bool = False
+
+    # Mouse exosome alignment
+    mouse_reference_arms: Optional[List[str]] = None
+    mouse_contrasts: Optional[List[str]] = None
+    mouse_min_reference_samples: int = 20
+    mouse_min_reference_ages: int = 4
+    mouse_min_samples_per_group: int = 3
+    mouse_tissue_bootstrap: int = 1000
+    mouse_tissue_permutations: int = 1000
+    mouse_alignment_contrasts: Optional[List[str]] = None
+    mouse_to_primate_tissue_map: Optional[Dict[str, str]] = None
+
+    # Methylation validation
+    methylation_group_age_map: Optional[Dict[str, float]] = None
+    methylation_to_primate_tissue_map: Optional[Dict[str, str]] = None
+    methylation_min_common_tissues: int = 3
 
     # Column candidates for auto-detection
     sample_id_col_candidates: Optional[List[str]] = None
@@ -70,7 +90,7 @@ class PipelineConfig:
     animal_id_col_candidates: Optional[List[str]] = None
 
     # Labels
-    mouse_treated_label: str = "Exosome"  # adjust to your metadata
+    mouse_treated_label: str = "GES"
     mouse_control_labels: Optional[List[str]] = None
 
     # Feature selection
@@ -142,7 +162,7 @@ class PipelineConfig:
             "Y_C", "M_C", "O_C", "O_WT", "O_V"
         ]
         self.mouse_control_labels = self.mouse_control_labels or [
-            "Saline", "Control", "WTC"
+            "Veh", "WT", "Ctrl", "Baseline"
         ]
         self.tissue_effect_covariates = self.tissue_effect_covariates or ["age", "sex", "batch"]
         self.sensitivity_top_feature_thresholds = self.sensitivity_top_feature_thresholds or [
@@ -150,3 +170,33 @@ class PipelineConfig:
             int(self.n_top_plasma_features),
             100,
         ]
+        self.mouse_reference_arms = self.mouse_reference_arms or ["Baseline"]
+        self.mouse_contrasts = self.mouse_contrasts or ["GES_vs_Veh", "WT_vs_Veh", "GES_vs_WT"]
+        self.mouse_alignment_contrasts = self.mouse_alignment_contrasts or ["GES_vs_Veh", "WT_vs_Veh"]
+        self.mouse_to_primate_tissue_map = self.mouse_to_primate_tissue_map or {
+            "brain": "Hippocampus",
+            "kidney": "Renal_cortex",
+            "liver": "Liver_L",
+            "lung": "Lung_R3_3",
+            "muscle": "Quadriceps_muscle",
+        }
+        self.methylation_group_age_map = self.methylation_group_age_map or {
+            "Y_C": 4.5,
+            "Y_WT": 4.5,
+            "Y_WS": 4.5,
+            "M_C": 11.0,
+            "O_C": 17.0,
+            "O_V": 21.0,
+            "O_WT": 21.0,
+            "O_GES": 21.0,
+            "O_CR": 21.0,
+            "O_Met": 21.0,
+            "O_VC": 21.0,
+        }
+        self.methylation_to_primate_tissue_map = self.methylation_to_primate_tissue_map or {
+            "Brain": "Hippocampus",
+            "Kidney": "Renal_cortex",
+            "Liver": "Liver_L",
+            "Lung": "Lung_R3_3",
+            "Quadriceps muscle": "Quadriceps_muscle",
+        }

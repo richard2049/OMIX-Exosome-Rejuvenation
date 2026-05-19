@@ -16,11 +16,9 @@ import pandas as pd
 import logging
 
 from sklearn.linear_model import Ridge
-from sklearn.model_selection import KFold, cross_val_predict
+from sklearn.model_selection import KFold, GroupKFold, cross_val_predict
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from scipy.stats import pearsonr, spearmanr
-
-from .logging_utils import get_logger
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +69,8 @@ def train_transcriptomic_clock(
     n_top_features: Optional[int] = None,
     n_splits: int = 5,
     random_state: int = 42,
-) -> Tuple[TrainedClock, pd.DataFrame, Dict[str, float]]:
+    cv_group_col: Optional[str] = None,
+) -> Tuple[TrainedClock, pd.DataFrame, Dict[str, Any]]:
     """
     Train a simple transcriptomic aging clock and evaluate it with
     honest out-of-sample predictions using K-fold cross-validation.
@@ -144,8 +143,58 @@ def train_transcriptomic_clock(
         base_estimator = Ridge(alpha=1.0, random_state=random_state)
 
     # Cross-validation OUT-OF-SAMPLE
-    cv = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-    y_pred_cv = cross_val_predict(base_estimator, X.values, y, cv=cv)
+    cv_n_splits = max(2, min(int(n_splits), int(len(y))))
+    cv_strategy = "KFold"
+    cv_n_groups = np.nan
+
+    use_group_cv = cv_group_col is not None and cv_group_col in meta_train.columns
+
+    if use_group_cv:
+        g_raw = meta_train[cv_group_col].astype("string")
+        g_clean = g_raw.str.strip().replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "<NA>": pd.NA})
+        valid_groups = g_clean.dropna()
+        unique_valid_groups = np.unique(valid_groups.astype(str).values) if len(valid_groups) > 0 else []
+        cv_n_groups = float(len(unique_valid_groups))
+
+        # Fill missing group labels with sample-specific placeholders so they
+        # do not collapse into one pseudo-group.
+        g_full = g_clean.copy()
+        miss = g_full.isna()
+        if miss.any():
+            g_full.loc[miss] = ("__MISSING__" + pd.Index(meta_train.index[miss]).astype(str))
+
+        group_values = g_full.astype(str).values
+        unique_groups_for_cv = np.unique(group_values)
+        if len(unique_valid_groups) >= 2 and len(unique_groups_for_cv) >= 2:
+            cv_n_splits = min(cv_n_splits, len(unique_groups_for_cv))
+            if cv_n_splits >= 2:
+                cv_strategy = f"GroupKFold({cv_group_col})"
+                cv = GroupKFold(n_splits=cv_n_splits)
+                y_pred_cv = cross_val_predict(
+                    base_estimator,
+                    X.values,
+                    y,
+                    cv=cv,
+                    groups=group_values,
+                )
+            else:
+                cv = KFold(n_splits=2, shuffle=True, random_state=random_state)
+                y_pred_cv = cross_val_predict(base_estimator, X.values, y, cv=cv)
+        else:
+            logger.info(
+                "train_transcriptomic_clock: %s has <2 valid unique groups; using KFold.",
+                cv_group_col,
+            )
+            cv = KFold(n_splits=cv_n_splits, shuffle=True, random_state=random_state)
+            y_pred_cv = cross_val_predict(base_estimator, X.values, y, cv=cv)
+    else:
+        if cv_group_col is not None:
+            logger.info(
+                "train_transcriptomic_clock: could not use grouped CV on '%s'; using KFold.",
+                cv_group_col,
+            )
+        cv = KFold(n_splits=cv_n_splits, shuffle=True, random_state=random_state)
+        y_pred_cv = cross_val_predict(base_estimator, X.values, y, cv=cv)
 
     # Metrics
     mae = mean_absolute_error(y, y_pred_cv)
@@ -163,6 +212,9 @@ def train_transcriptomic_clock(
         "pearson_r": float(r_pearson),
         "spearman_r": float(r_spearman),
         "calibration_slope": float(slope),
+        "cv_strategy": cv_strategy,
+        "cv_n_splits": float(cv_n_splits),
+        "cv_n_groups": cv_n_groups,
     }
 
     logger.info(
@@ -260,7 +312,7 @@ def predict_biological_age(
     if not sample_ids:
         raise ValueError("No overlapping sample IDs between metadata and expression matrix.")
 
-    # genes x samples → samples x genes
+    # genes x samples -> samples x genes
     X_full = expr_log.loc[:, sample_ids].T  # shape: (n_samples, n_genes)
 
     # IMPORTANT: we assume here that the feature set (genes) is the same as
@@ -307,7 +359,7 @@ def summarize_clock_performance(
     r_pearson, _ = pearsonr(y_true, y_pred)
     r_spearman, _ = spearmanr(y_true, y_pred)
 
-    # Calibration slope (OLS univariado)
+    # Calibration slope (univariate OLS)
     x = y_true
     y = y_pred
     slope = float(

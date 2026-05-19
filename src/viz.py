@@ -73,29 +73,69 @@ def plot_plasma_biomarker_ranking(
     plasma_biomarkers: pd.DataFrame,
     outpath: Path,
     top_n: int = 20,
-    title: str = "Top plasma biomarker candidates"
+    title: str = "Top plasma biomarker candidates",
+    requires_spearman: bool = False,
+    fallback_metric: str = "variance",  # "variance" | "abs_mean" | "abs_diff"
 ) -> None:
-    """
-    Horizontal bar plot of top plasma biomarker candidates by |Spearman r|.
-
-    Expects columns:
-      - protein
-      - spearman_r
-      - qval (optional)
-    """
-    if plasma_biomarkers.empty:
+    if plasma_biomarkers is None or plasma_biomarkers.empty:
         logger.warning("Empty plasma biomarker table; skipping plot.")
         return
 
     df = plasma_biomarkers.copy()
-    if "abs_r" not in df.columns:
-        df["abs_r"] = df["spearman_r"].abs()
 
-    df = df.sort_values("abs_r", ascending=True).tail(top_n)
+    # Case 1: expected ranking exists
+    if "spearman_r" in df.columns:
+        if "abs_r" not in df.columns:
+            df["abs_r"] = pd.to_numeric(df["spearman_r"], errors="coerce").abs()
+        score_col = "abs_r"
+        xlabel = "|Spearman r|"
+    else:
+        if requires_spearman:
+            logger.warning(
+                "plot_plasma_biomarker_ranking: 'spearman_r' missing and requires_spearman=True; skipping plot."
+            )
+            return
+        # Case 2: fallback ranking
+        logger.info("plot_plasma_biomarker_ranking: 'spearman_r' missing; using fallback=%s", fallback_metric)
+
+        # Heuristics: figure out a numeric score column
+        numeric_cols = df.select_dtypes(include="number").columns.tolist()
+
+        if fallback_metric == "variance" and "variance" in df.columns:
+            score_col = "variance"
+            xlabel = "Variance"
+        elif fallback_metric == "abs_mean" and "mean" in df.columns:
+            df["abs_mean"] = df["mean"].abs()
+            score_col = "abs_mean"
+            xlabel = "|Mean|"
+        elif fallback_metric == "abs_diff" and {"mean_treated", "mean_control"}.issubset(df.columns):
+            df["abs_diff"] = (df["mean_treated"] - df["mean_control"]).abs()
+            score_col = "abs_diff"
+            xlabel = "|Delta mean|"
+        elif numeric_cols:
+            # last resort: use the first numeric col
+            score_col = numeric_cols[0]
+            xlabel = score_col
+        else:
+            logger.warning("No numeric columns available for fallback ranking; skipping plot.")
+            return
+
+    # Label column fallback
+    label_col = "protein" if "protein" in df.columns else ("Gene name" if "Gene name" in df.columns else None)
+    if label_col is None:
+        logger.warning("No label column ('protein'/'Gene name') found; skipping plot.")
+        return
+
+    df = df.dropna(subset=[score_col])
+    if df.empty:
+        logger.warning("No usable scores for plasma ranking plot after dropna; skipping.")
+        return
+
+    df = df.sort_values(score_col, ascending=True).tail(top_n)
 
     plt.figure()
-    plt.barh(df["protein"], df["abs_r"])
-    plt.xlabel("|Spearman r| with outcome")
+    plt.barh(df[label_col].astype(str), df[score_col].astype(float))
+    plt.xlabel(xlabel)
     plt.title(title)
 
     outpath.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +179,7 @@ def plot_age_scatter(
     plt.figure(figsize=(8, 6))
     plt.scatter(x, y, alpha=0.6)
 
-    # Refference diagonal 1:1
+    # Reference 1:1 diagonal
     xy_min = min(x.min(), y.min())
     xy_max = max(x.max(), y.max())
     plt.plot([xy_min, xy_max], [xy_min, xy_max], linestyle="--")
@@ -258,7 +298,7 @@ def plot_rejuvenation_by_group(
     ax.set_xticklabels(xtick_labels, rotation=30, ha="right")
 
     ax.set_xlabel(group_col)
-    ax.set_ylabel("Rejuvenation score (Δ units; negative = younger)")
+    ax.set_ylabel("Rejuvenation score (Delta units; negative = younger)")
 
     # Horizontal reference line at 0 (no rejuvenation)
     ax.axhline(0.0, linestyle="--", linewidth=1)
@@ -329,7 +369,7 @@ def plot_mediation_effects_bar(
     plt.bar(labels, effects)
     plt.axhline(0.0, linestyle="--", linewidth=1)
 
-    plt.ylabel("Effect size (Δ years or standardized units)")
+    plt.ylabel("Effect size (Delta years or standardized units)")
     plt.title(title)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
