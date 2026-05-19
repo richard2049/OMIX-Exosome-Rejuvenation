@@ -55,7 +55,9 @@ def standardize_metadata_columns(
 
     for col in ("group", "tissue", "sex", "animal_id"):
         if col in meta.columns:
-            meta[col] = meta[col].astype(str).str.strip()
+            s = meta[col].astype("string").str.strip()
+            s = s.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "<NA>": pd.NA})
+            meta[col] = s
 
     return meta
 

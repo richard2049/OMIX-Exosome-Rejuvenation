@@ -1,9 +1,8 @@
 """
-# omix_io.py
+omix_io.py
 
-# I/O helpers for OMIX datasets: safe loading of matrices and metadata,
-# plus simple guardrails on shapes and sample IDs.
-# -----------------------------------------------------------------------------
+I/O helpers for OMIX datasets: safe loading of matrices and metadata,
+plus conservative guardrails on shapes and sample IDs.
 """
 from __future__ import annotations
 
@@ -241,7 +240,7 @@ def _read_one_matrix_file(
         raise ValueError(f"Empty header in matrix file: {file_path}")
 
     usecols = None
-    
+    sample_cols = header[1:]
     if allowed_samples is not None:
         allowed = set(map(str, allowed_samples))
         kept = [first_col] + [c for c in header[1:] if c in allowed]
@@ -259,6 +258,9 @@ def _read_one_matrix_file(
             )
 
         usecols = kept
+        sample_cols = kept[1:]
+
+    dtype_map = {col: dtype for col in sample_cols}
 
     try:
         df = pd.read_csv(
@@ -266,6 +268,7 @@ def _read_one_matrix_file(
             sep=sep,
             index_col=index_col,
             usecols=usecols,
+            dtype=dtype_map,
             engine="c",
         )
     except Exception as e:
@@ -275,16 +278,13 @@ def _read_one_matrix_file(
             sep=sep,
             index_col=index_col,
             usecols=usecols,
+            dtype=dtype_map,
             engine="python",
             on_bad_lines="warn",
         )
 
     df.index = df.index.astype(str)
     df.columns = df.columns.astype(str)
-
-    if dtype is not None:
-        numeric_cols = df.columns
-        df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="raise").astype(dtype)
 
     if df.shape[1] > MAX_OUTPUT_COLS:
         raise ValueError(

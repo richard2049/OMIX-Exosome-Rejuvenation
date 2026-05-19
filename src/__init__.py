@@ -1,1 +1,1 @@
-# Package marker for src
+"""SRSC analysis package."""

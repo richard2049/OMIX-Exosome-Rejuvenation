@@ -1,251 +1,185 @@
-# SRSC: Cross-species translational analysis of exosome interventions (exploratory v0.1, Phase 1)
+# SRSC: Reproducible macaque rejuvenation pipeline for tissue vs plasma-exosome signals
+
+SRSC resolves one core problem: **run a transparent, reproducible analysis of macaque multi-omics data to test whether observed rejuvenation signals look more cell-intrinsic or plasma/exosome-associated, with explicit estimability gates when causal linkage is not possible.**
+
+## At a Glance
+
+### What it does
+- Builds a **cross-validated transcriptomic aging clock** from primate bulk RNA-seq and derives sample-level rejuvenation proxies (`rejuvenation_score`, `delta_age`).
+- Quantifies rejuvenation signal by **group and tissue** with bootstrap summaries and covariate-adjusted tissue expression effects (age/sex/batch when available).
+- Integrates plasma proteomics and enforces **strict estimability gates** for mediation/decomposition, plus uncertainty-aware exosome-fraction summaries.
+
+### Current phase updates
+- Adds a conservative plasma-to-animal linkage layer for OMIX007581 sample IDs, with explicit provenance and confidence labels.
+- Integrates `OMIX009283` as a mouse exosome mechanism-support block and writes cross-species alignment summaries instead of relying only on a placeholder exosome fraction.
+- Promotes methylation to an orthogonal validation layer with explicit multimodal concordance output.
+- Keeps mediation on **animal-level aggregated rows** (not tissue-replicated rows) to avoid pseudo-replication.
+
+### Run in 3 commands
+```bash
+conda env create -f environment.yml
+conda activate srsc
+python -m src.run_pipeline
+```
+
+### Data profiles
+- `python -m src.run_pipeline --profile full`: use the full-data working layout under `data/RAW/data`.
+- `python -m src.run_pipeline --profile demo`: use the example/demo layout under `data/PROCESSED`.
+- `python -m src.run_pipeline --profile auto`: prefer full data when present, otherwise fall back to demo data.
+- `python -m src.run_pipeline --data-root <PATH>`: point the selected profile at a different data directory without editing source code.
+
+### What you get (main outputs)
+
+| Output | Purpose | Interpretable when unlinked? |
+|---|---|---|
+| `results/clock_metrics_primates.csv` | CV clock performance (MAE, RMSE, Pearson/Spearman, calibration, CV strategy) | Yes |
+| `figures/primates_age_scatter.png` | Chronological vs predicted age sanity check | Yes |
+| `results/rejuvenation_by_tissue.csv` | Tissue-level rejuvenation summary (treated vs controls) | Yes |
+| `results/tissue_expression_effects.csv` | Covariate-adjusted tissue treatment effects | Yes |
+| `results/mouse_exosome_effects.csv` | Mouse exosome tissue effects from `OMIX009283` using tissue-specific age-clock contrasts | Yes |
+| `results/mouse_exosome_signature_summary.csv` | Contrast-level summary of the mouse exosome mechanism-support block | Yes |
+| `results/exosome_alignment_by_tissue.csv` | Tissue-wise macaque vs mouse exosome alignment metrics | Yes |
+| `results/exosome_alignment_summary.csv` | Primary exosome-aligned contribution summary with explicit evidence tiering | Yes |
+| `results/methylation_rejuvenation_by_tissue.csv` | Tissue-level methylation rejuvenation validation summary | Yes |
+| `results/multimodal_concordance_summary.csv` | Transcriptome vs methylation concordance summary on overlapping tissues | Yes |
+| `results/ovary_subset_validation.csv` | Targeted ovary subset validation audit | Yes |
+| `results/hippocampus_subset_validation.csv` | Targeted hippocampus subset validation audit | Yes |
+| `results/plasma_biomarkers.csv` | Plasma proteins ranked by association metric | Yes |
+| `results/plasma_to_animal_map.csv` | Plasma sample mapping audit (`sample_id -> animal_id`, confidence, rule, validity) | Yes |
+| `results/linkage_qc_report.csv` | Mapping coverage/collision diagnostics used before linkage gate | Yes |
+| `results/linkage_audit.csv` | Animal-level overlap quality diagnostics across bulk/plasma | Yes |
+| `results/estimability_report.csv` | Hard gate (`unlinked`, `partially_linked`, `fully_linked`) for mediation/decomposition | Yes |
+| `results/mediation_summary.csv` | Real mediation only when strictly allowed; otherwise explicit structured stub | Conditionally |
+| `results/exosome_fraction_summary.csv` | Compatibility exosome-fraction artifact retained while alignment summaries are primary | Conditionally |
+| `results/sensitivity_summary.csv` | Control-set and top-feature-threshold sensitivity runs with direction/stability flags | Yes |
+
+## Scientific objective and claim discipline
+
+### Central question
+Can the rejuvenation-associated signal in the macaque study be partitioned into:
+- **cell-intrinsic/tissue expression shifts**, vs
+- **plasma/exosome-associated signatures**?
+
+### What SRSC currently supports
+- Strong, reproducible evidence on **clock behavior** and **group/tissue rejuvenation trends**.
+- Covariate-adjusted tissue effects with uncertainty metrics and per-tissue FDR.
+- Cross-species **exosome-aligned contribution** summaries against `OMIX009283`, with the legacy exosome-fraction CSV kept only as a compatibility layer.
+- Methylation-based orthogonal validation and multimodal concordance summaries.
+- Causal mediation/decomposition only when strict linked-data criteria are met.
+
+### What SRSC explicitly does not over-claim
+Without reliable plasma-to-bulk `animal_id` linkage, SRSC does **not** present mediation/decomposition as causal evidence. It writes structured stubs with reasons instead.
+
+## Design Decisions and Scientific Guardrails
+
+- **Guardrailed I/O over convenience**: OMIX loaders enforce metadata sanity checks, alignment checks, and safe fallbacks for messy public files.
+- **No silent causal leakage**: clock training uses grouped CV when valid `animal_id` groups exist; otherwise it falls back to KFold and records the CV strategy in metrics.
+- **Strict causal gate**: `enable_mediation=True` is not sufficient; decomposition also requires `enable_causal_decomposition=True`, `tier=fully_linked`, and minimum sample criteria.
+- **Conservative linkage policy**: deterministic mapping is accepted only for directly compatible plasma codes (`V/WT/GES`) and is validated against observed bulk `orig.ident`.
+- **Animal-level mediation inputs**: linked mediation uses one aggregated row per animal to reduce pseudo-replication risk.
+- **Machine-consistent summaries**: key CSVs follow a common schema (`available`, `estimable`, `reason`, `n_used`, `method`, `ci_low`, `ci_high`) and include `evidence_level` to reduce over-interpretation.
+- **Canonical group legend**: use `Documents/group_label_crosswalk.md` when translating article labels (`A4-Ctrl`, `A4-WTC`, `A4-SRC`) into repo/OMIX labels (`O_V`, `O_WT`, `O_GES`).
+
+## Pipeline structure
+
+`src/run_pipeline.py` orchestrates:
+1. Load and harmonize bulk RNA-seq metadata/matrix.
+2. Train transcriptomic clock and derive rejuvenation proxies.
+3. Summarize rejuvenation globally and by tissue.
+4. Estimate covariate-adjusted tissue expression effects (with p-values and FDR).
+5. Load and clean plasma proteomics, rank plasma biomarkers.
+6. Build conservative plasma-to-animal mapping and emit linkage QC diagnostics.
+7. Compute linkage audit + estimability tier.
+8. Run mediation/decomposition only when strict gate is satisfied; otherwise write structured stubs.
+9. Build mouse exosome mechanism-support effects and exosome-alignment summaries.
+10. Run methylation validation and multimodal concordance checks.
+11. Write targeted subset-validation audits for ovary and hippocampus.
+12. Estimate the legacy compatibility exosome fraction and run sensitivity analyses.
+13. Write standardized summaries and plots.
+
+## Data scope
+
+SRSC is wired for public OMIX macaque datasets and optional exploratory modules:
+- `OMIX007580` (bulk transcriptomics)
+- `OMIX007581` (plasma proteomics)
+- `OMIX007582` (Mammal40 methylation; optional)
+- optional mouse exosome block (translation scaffolding)
 
-> **Status:** exploratory / work in progress (v0.1, Phase 1).  
-> This repository is intended as a portfolio / research project in aging and translational bioinformatics.
+Raw full datasets are not redistributed in this repository. Example-compatible execution is supported through the repository layout and config defaults.
 
-## Overview
+## Full-data vs clean/demo usage
 
-Omix-exosome-rejuvenation is an exploratory pipeline to analyze primate rejuvenation and exosome-mediated effects from public OMIX datasets.
+- **SRSC-work**: full-data development and debugging environment.
+- **SRSC (clean)**: reproducible public-facing run profile for portfolio and collaboration onboarding (typically with reduced example files).
 
-It implements:
+Both use the same pipeline entrypoint and produce the same output schema.
+Depending on data reduction in the clean profile, linkage tiers may differ from full-data runs.
 
-- robust data loading / guardrails for OMIX matrices and metadata,
-- a lightweight **transcriptomic clock** trained on bulk tissues,
-- plasma proteomics–based state scores,
-- and a first-pass estimate of the exosome-attributable fraction of rejuvenation.
+## Interpreting current limitation correctly
 
-The code is research-oriented, not an official pipeline, and focuses on transparency and reproducibility rather than definitive biological claims.
+Public OMIX007581 plasma columns are mixed in linkage quality:
+- some are directly compatible with bulk animal IDs (`FV_2`, `MWT_3`, `FGES_1`),
+- others remain unresolved without external key metadata (for example, `FY_*`, `MY_*`).
 
-This project explores cross-species translational signals between mouse and primate
-datasets in the context of exosome-based interventions. The pipeline integrates:
+Group naming should also be interpreted through the repository crosswalk:
+- `A4-WTC -> O_WT` is strongly supported by the article terminology plus OMIX/BioProject naming.
+- `A4-SRC -> O_GES` is strongly supported by the article `SRC` arm plus public BioProject sample names such as `GESMSC-F-1`.
+- `A4-Ctrl -> O_V` is strongly supported by the article saline control arm plus public BioProject sample names such as `O-V-F-1`.
 
-- mouse bulk RNA-seq (tissue-level effects),
-- plasma proteomics,
-- and primate methylation data (OMIX007582, Mammal40 array),
+Use `Documents/group_label_crosswalk.md` as the operational source of truth for these translations.
 
-to derive exploratory translational insights about rejuvenation-like signatures.
+Implication:
+- a **high-confidence linked subset** may be analyzable when overlap/quality thresholds are satisfied,
+- unresolved subsets stay excluded from linked causal analyses by design,
+- if thresholds fail, `estimability_report.csv` and downstream causal outputs remain structured non-estimable stubs.
 
-The code is intentionally modular and experiment-focused rather than production-grade.
+This is a data linkage constraint, not a software bug.
 
----
+## Maturity roadmap (next steps)
 
-## What’s new in Phase 1
+1. Add robust external mapping to enable true plasma-bulk `animal_id` linkage.
+2. Extend exosome-fraction falsification with tissue-aware/per-group constrained null models.
+3. Extend subset validation from sample-sheet audits to expression-level pseudobulk checks when runtime permits.
+4. Add broader CI coverage for full output schema and sensitivity stability checks.
 
-Phase 1 focuses on having a **fully runnable, small-scale end-to-end example** with realistic guardrails, rather than on biological completeness. The main additions are:
+## Who This Repository Is For
 
-- **Transcriptomic clock (primate bulk expression)**
-  - Simple, regression-based age predictor trained on bulk RNA-seq.
-  - Uses numeric ages from metadata; includes strict checks so the pipeline fails fast if there are too few valid training samples.
-  - Produces per-sample predicted age and residuals (e.g. ΔAge-style scores) for exploratory rejuvenation readouts.
+SRSC demonstrates end-to-end ownership across:
+- scientific modeling and statistical prudence,
+- production-minded data guardrails under messy public omics metadata,
+- reproducibility and transparent failure modes,
+- interpretable outputs suitable for peer review and collaboration handoff.
 
-- **Improved OMIX example files**
-  - New small, consistent, NaN-safe example files for primate bulk expression and plasma proteomics, with matching metadata:
-    - `data/processed/OMIX007580_01_example.*` (bulk transcriptomics)
-    - `data/processed/OMIX007580_01_metadata_example.*` (matching metadata, including numeric age)
-    - `data/processed/OMIX007581-01_example.*` (plasma proteomics for a subset of the same samples)
-  - Example files are subsetted from the original OMIX matrices (e.g. ~30 samples) to:
-    - avoid memory issues on laptops,
-    - demonstrate the expected column naming conventions,
-    - prevent all-NaN columns/rows after QC.
+## Minimal repository map
 
-- **Safer OMIX I/O layer (`src/omix_io.py`)**
-  - Robust metadata loader that handles:
-    - real Excel (`.xlsx`, `.xls`),
-    - mislabeled “fake xlsx” that are actually CSV/TSV/HTML,
-    - plain CSV/TSV/TXT with conservative size checks.
-  - Matrix loader with:
-    - header-only preflight checks (to avoid accidentally loading massive tables),
-    - explicit sample-whitelisting via metadata,
-    - hard stops on absurd column counts.
-  - Alignment helper that:
-    - detects sample ID columns in metadata by name/overlap,
-    - aligns matrix columns to metadata rows,
-    - enforces reasonable sample counts and overlapping IDs before proceeding.
+- `src/run_pipeline.py`: main entrypoint.
+- `src/omix_io.py`: robust matrix/metadata loading and alignment guardrails.
+- `src/clocks.py`: transcriptomic clock training and prediction.
+- `src/rejuvenation.py`: rejuvenation and tissue-level summaries.
+- `src/linkage_audit.py`: bulk-plasma linkage diagnostics and estimability gating.
+- `src/viz.py`: plotting utilities.
+- `results/`, `figures/`: generated artifacts.
 
-- **Plasma proteomics cleaning for PCA-based scores**
-  - `clean_plasma_matrix` now:
-    - drops all-NaN rows/columns,
-    - filters features/samples by minimum non-NaN fraction,
-    - performs robust median imputation per feature,
-    - guarantees a non-empty, numeric matrix after QC when example files are used.
+## Reproducibility notes
 
-These changes are aimed at making the pipeline easier to run end-to-end on a laptop with **only the small example files**, while surfacing clear, informative errors when real OMIX data are incomplete or inconsistent.
+- Environment: `environment.yml` (conda).
+- Determinism: fixed seeds in config and bootstrap paths.
+- Main command: `python -m src.run_pipeline`.
+- Guardrail tests: `pytest -q tests/test_scientific_guardrails.py`.
+- Methylation sample-map audit: `python -m src.omix007582_audit`.
 
----
+For laptop-conservative runs:
+```bash
+python -m src.run_pipeline --safe
+```
 
-## Data
+For the current `OMIX007582` mapping status:
+- see `Documents/OMIX007582_sample_map_audit.md`
+- regenerate machine-readable audit tables with `python -m src.omix007582_audit`
 
-The project uses public datasets from OmicsDI / NGDC, including:
-
-- **OMIX007580 / OMIX007581** (expression / proteomics)
-- **OMIX007582** (Mammal40 methylation, IDAT format)
-
-Raw data files (IDAT, full matrices, etc.) are **not** stored in this repository.
-
-Instead, the repo includes **small illustrative examples** that conform to the internal I/O guardrails:
-
-- `data/processed/OMIX007580_01_example.*`  
-  Small bulk RNA-seq matrix (genes × samples) with realistic column names (e.g. `01-YM-C_Abdominal_subcutaneous_fat`) used for the transcriptomic clock.
-- `data/processed/OMIX007580_01_metadata_example.*`  
-  Matching metadata with (at minimum) a sample ID column and a **numeric age** column, plus optional tissue / group annotations.
-- `data/processed/OMIX007581-01_example.*`  
-  Small plasma proteomics matrix (proteins × samples) with overlapping sample IDs relative to the bulk expression example, pre-filtered to avoid all-NaN columns after QC.
-- `data/processed/OMIX007582_beta_matrix_example.csv`  
-  A small beta-value matrix (CpG × sample) illustrating expected methylation matrix format.
-
-These files are meant to:
-
-- document expected shapes and column naming,
-- allow the pipeline to run on a “toy SRSC dataset” without downloading the full OMIX data,
-- and exercise all the main analysis steps (clock, plasma PCA, basic cross-block summaries) in a reproducible, laptop-friendly way.
-
----
-
-## Methylation processing (OMIX007582, Mammal40)
-
-The `scripts/process_OMIX007582_Mammal40.R` script uses
-[SeSAMe](https://bioconductor.org/packages/release/bioc/html/sesame.html) and
-`sesameData` to process Mammal40 IDAT files into a CpG × sample beta-value matrix.
-
-**Important limitations:**
-
-- The beta matrix contains **643 sample columns** (technical IDs).
-- The accompanying metadata table `OMIX007582-02.csv` has **620 rows** (biological samples).
-- No public mapping is provided that unambiguously links every IDAT file to its exact
-  biological sample.
-- Current implementation wires a placeholder for exosome-attributable fraction; on the public SRSC OMIX datasets there is no shared tissue axis between bulk and plasma.
-- Mouse block and cross-species translational summaries are scaffolded but not yet implemented.
-- For the plasma block (OMIX007581) the public deposit only provides a single wide CSV file (`PlasmaProtein_exp_mat`, proteins × samples). There is no separate metadata file linking plasma samples to individual animals or to the tissue RNA-seq samples from OMIX007580. 
-
-Consequently:
-
-- `OMIX007582_beta_matrix.csv` is produced with **technical sample IDs** only and used
-  for analyses that do not require exact one-to-one sample annotation.
-- An **optional** partially named matrix (`OMIX007582_beta_matrix_named_partial.csv`)
-  can be generated by assuming column order ≈ metadata row order for the first
-  620 samples. This is clearly marked in the code as *exploratory-only* and is
-  not used for strong sample-level conclusions.
-- The fraction estimate is still marked as non-informative (n_common_tissues = 0, ratio = NaN).
-- The pipeline safely skips the mouse block and the cross-species translational summaries and logs a warning.
-- There is **no reliable `animal_id` field** that would allow us to
-match “this plasma sample” to “this bulk transcriptomic sample” for the
-same monkey using only the public data. Because of this, the following components are **optional** and remain disabled or no-op when `animal_id` is missing in the plasma metadata:
-
-  - Bootstrap mediation of a plasma “state score” between treatment and
-    `rejuvenation_score`;
-  - Simple causal decomposition of the rejuvenation effect into
-    cell-intrinsic vs exosome-mediated components.
-
-All other parts of the pipeline (transcriptomic clock, rejuvenation by
-group and by tissue, tissue-level expression shifts, and plasma biomarker
-ranking) run on the public data without additional metadata.
-
----
-
-## Pipeline
-
-The main workflow is implemented in `src/run_pipeline.py` and includes:
-
-- loading and harmonizing omics blocks (expression, proteomics, methylation),
-- training and applying a **bulk transcriptomic clock** on primate expression data,
-- computing plasma proteomics–based state scores (PCA on cleaned proteomics matrix),
-- estimating exosome-attributable fractions (where shared tissue axes exist),
-- cross-tissue concordance analyses,
-- optional translational insight generation when all required blocks are available.
-
-When methylation sample IDs cannot be aligned to full metadata, the pipeline:
-
-- falls back to minimal metadata (`sample_id` only),
-- logs clear warnings,
-- and skips analyses that would require fully matched annotation, instead of forcing
-  an incorrect mapping.
-
-### Clean plasma matrix for PCA
-
-For the plasma proteomics block, `clean_plasma_matrix` performs:
-
-1. Drop rows and columns that are entirely NaN.
-2. Filter features that have too many missing values (configurable fraction).
-3. Filter samples that have too many missing values (configurable fraction).
-4. Median imputation per feature.
-5. Final safety checks to ensure no remaining NaNs.
-
-The resulting matrix is suitable for PCA-based state scoring, even on small example datasets.
-
----
-
-## Reproducibility
-
-A minimal `environment.yml` is provided with Python dependencies
-(e.g. `pandas`, `numpy`, `scanpy`, etc.). Methylation processing depends on:
-
-- R (`>=4.3`)
-- Bioconductor packages `sesame`, `sesameData`, `BiocParallel`
-
-See `scripts/process_OMIX007582_Mammal40.R` for details.
-
----
-
-## Status and future work
-
-This is a **v0.1 exploratory / Phase 1** implementation. The current focus is on:
-
-- robust, explicit handling of real-world data issues (NaNs, mismatched IDs, huge matrices),
-- a minimal yet reproducible **transcriptomic clock** for primate bulk expression,
-- NaN-safe, laptop-scale example datasets for all major blocks (bulk, plasma, methylation).
-
-Planned directions include:
-
-- obtaining or reconstructing a more reliable sample matching for OMIX007582,
-- extending the translational module with additional mouse interventions,
-- richer exosome-attributable fraction modeling once shared tissue axes are available on public data,
-- refactoring the pipeline into a more generalizable package.
-
-Despite the limitations, this repository documents the end-to-end process of:
-
-- integrating multi-omics public datasets,
-- handling real-world metadata inconsistencies,
-- building and debugging a transcriptomic clock and plasma PCA scores under strict guardrails,
-- and extracting exploratory translational hypotheses in the aging / longevity domain.
-
-## Version history
-
-- v0.1 Phase 1
-  - Added primate bulk transcriptomic clock.
-  - Added NaN-safe plasma proteomics cleaning and PCA scores.
-  - Introduced small, consistent OMIX example files.
-  - Hardened OMIX I/O (metadata + matrix guardrails).
-  - Documented Mammal40 sample-matching limitations.
-
-- v0.1 Phase 2 - Robust rejuvenation score & tissue signals
-
-Phase 2 extends the example pipeline with:
-
-- A robust definition of `delta_age = predicted_age – chronological_age`.
-- Global and tissue-level rejuvenation summaries with bootstrap confidence intervals.
-- Simple tissue-level expression effects (treated vs control) based on bulk RNA-seq.
-- Robust plotting utilities for rejuvenation by group (with sensible fallbacks when sample sizes are small).
-
-New outputs are written under `results/`:
-
-- `rejuvenation_by_tissue.csv`
-- `tissue_expression_effects.csv`
-- `figures/rejuvenation_by_group_boxplot.png` (example run)
-
-## What’s new (v0.2 – transcriptomic rejuvenation & plasma)
-
-This update focuses on making the rejuvenation signal more robust and easier to inspect:
-
-- Added a cross-validated transcriptomic clock for primate bulk tissues.
-- Added a proxy rejuvenation score (`delta_age` / `rejuvenation_score`) with:
-  - Global summary of treated vs. control animals.
-  - Tissue-level summaries (`rejuvenation_by_tissue.csv`).
-- Exported tissue expression effects (`tissue_expression_effects.csv`) to inspect which genes and tissues move the most.
-- Added a minimal plasma proteomics module:
-  - Cleaning and filtering of the OMIX007581 plasma matrix.
-  - Simple “state” outcome based on Y / WT / V / GES group labels.
-  - Ranking of top plasma biomarker candidates (`plasma_biomarkers.csv`) and a summary plot.
-
-The exosome-attributable fraction and translational insights modules are still experimental:
-when the necessary inputs (mouse tissue effects, mouse expression log matrix) are not available,
-the pipeline now fails gracefully and emits explicit warnings instead of crashing.
+For low-friction promotion from the full-data work repo into the clean demo repo:
+```bash
+python -m src.repo_promotion
+python -m src.repo_promotion --apply
+```
+The promotion plan is controlled by `promotion_manifest.json` and copies only approved files into the sibling `SRSC` repo.
