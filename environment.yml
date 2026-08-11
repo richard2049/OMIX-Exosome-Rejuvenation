@@ -7,12 +7,16 @@ dependencies:
   - pandas
   - numpy
   - scipy
+  - scikit-learn
+  - statsmodels
   - matplotlib
   - seaborn
   - scanpy
+  - pymupdf
+  - pytest
   - pip
-  - scikit-learn
-  - statsmodels
-  - typing
   - pip:
       - anndata
+      - ftfy
+      - pdfplumber
+      - pypdf

@@ -2,7 +2,7 @@
 exosome_effect.py
 
 Functions to quantify tissue-level treatment effects, derive plasma /
-exosome-like state scores, compare bulk–plasma patterns and estimate the
+exosome-like state scores, compare bulk-plasma patterns and estimate the
 exosome-attributable fraction of rejuvenation.
 """
 
@@ -113,6 +113,132 @@ def estimate_exosome_fraction(effect_cells: pd.DataFrame, effect_exosomes: pd.Da
         "exo_median_abs": float(exo_mag),
         "ratio": ratio
     }
+
+
+def estimate_exosome_fraction_with_uncertainty(
+    effect_cells: pd.DataFrame,
+    effect_exosomes: pd.DataFrame,
+    n_bootstrap: int = 2000,
+    n_permutations: int = 1000,
+    random_state: int = 42,
+    min_common_tissues: int = 3,
+    min_cells_median_abs: float = 1e-8,
+) -> Dict:
+    """
+    Estimate exosome-attributable fraction with uncertainty and falsification.
+
+    Primary statistic:
+      ratio = median(|exo_effect|) / median(|cell_effect|)
+    computed across common tissues.
+
+    Uncertainty:
+      bootstrap CI over common tissues.
+
+    Falsification:
+      permutation null by shuffling exosome tissue effects across the same
+      tissues and recomputing ratio; empirical p-value is the fraction of
+      permuted ratios >= observed ratio.
+    """
+    base = {
+        "available": False,
+        "estimable": False,
+        "reason": "",
+        "n_used": 0,
+        "method": "median_abs_ratio_bootstrap_permutation",
+        "ci_low": np.nan,
+        "ci_high": np.nan,
+        "n_common_tissues": 0,
+        "cells_median_abs": np.nan,
+        "exo_median_abs": np.nan,
+        "ratio": np.nan,
+        "empirical_p_value": np.nan,
+    }
+
+    if effect_cells is None or effect_exosomes is None:
+        base["reason"] = "Missing effect tables for cells and/or exosomes."
+        return base
+    if effect_cells.empty or effect_exosomes.empty:
+        base["reason"] = "Empty effect tables for cells and/or exosomes."
+        return base
+    if "mean_effect" not in effect_cells.columns or "mean_effect" not in effect_exosomes.columns:
+        base["reason"] = "Effect tables must contain a 'mean_effect' column."
+        return base
+
+    common = effect_cells.index.intersection(effect_exosomes.index)
+    n_common = int(len(common))
+    base["n_common_tissues"] = n_common
+
+    if n_common < int(min_common_tissues):
+        base["reason"] = (
+            f"Only {n_common} common tissues (< {int(min_common_tissues)} required)."
+        )
+        return base
+
+    cells = effect_cells.loc[common, "mean_effect"].astype(float).to_numpy()
+    exo = effect_exosomes.loc[common, "mean_effect"].astype(float).to_numpy()
+    ok = np.isfinite(cells) & np.isfinite(exo)
+    cells = cells[ok]
+    exo = exo[ok]
+
+    n_used = int(len(cells))
+    base["n_used"] = n_used
+    if n_used < int(min_common_tissues):
+        base["reason"] = (
+            f"Only {n_used} finite common tissues after filtering "
+            f"(< {int(min_common_tissues)} required)."
+        )
+        return base
+
+    cells_median_abs = float(np.median(np.abs(cells)))
+    exo_median_abs = float(np.median(np.abs(exo)))
+    base["cells_median_abs"] = cells_median_abs
+    base["exo_median_abs"] = exo_median_abs
+
+    if cells_median_abs < float(min_cells_median_abs):
+        base["reason"] = (
+            "Cell-effect denominator is too close to zero; ratio unstable."
+        )
+        return base
+
+    ratio_obs = float(exo_median_abs / cells_median_abs)
+    base["ratio"] = ratio_obs
+
+    rng = np.random.default_rng(random_state)
+    idx = np.arange(n_used)
+
+    # Bootstrap CI
+    boot = []
+    for _ in range(int(n_bootstrap)):
+        bidx = rng.choice(idx, size=n_used, replace=True)
+        c_b = cells[bidx]
+        e_b = exo[bidx]
+        den = np.median(np.abs(c_b))
+        if den <= 0:
+            continue
+        boot.append(float(np.median(np.abs(e_b)) / den))
+
+    if boot:
+        base["ci_low"] = float(np.percentile(boot, 2.5))
+        base["ci_high"] = float(np.percentile(boot, 97.5))
+
+    # Permutation null (shuffle exosome effects across tissues)
+    perm = []
+    for _ in range(int(n_permutations)):
+        e_p = exo.copy()
+        rng.shuffle(e_p)
+        den = np.median(np.abs(cells))
+        if den <= 0:
+            continue
+        perm.append(float(np.median(np.abs(e_p)) / den))
+
+    if perm:
+        perm_arr = np.asarray(perm, dtype=float)
+        base["empirical_p_value"] = float(np.mean(perm_arr >= ratio_obs))
+
+    base["available"] = True
+    base["estimable"] = True
+    base["reason"] = ""
+    return base
 
 
 def build_plasma_state_score(
