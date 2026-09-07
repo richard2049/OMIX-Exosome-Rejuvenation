@@ -195,7 +195,7 @@ Key reading paths:
 - [PBMC single-cell audit](Documents/OMIX009284_audit.md)
 
 Questions, reproducibility problems, and metadata corrections can be reported
-through [GitHub Issues](https://github.com/richard2049/Omix-exosome-rejuvenation/issues).
+through [GitHub Issues](https://github.com/richard2049/OMIX-Exosome-Rejuvenation/issues).
 
 ## Citation and License
 
