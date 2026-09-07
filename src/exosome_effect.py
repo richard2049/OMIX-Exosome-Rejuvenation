@@ -18,6 +18,7 @@ from sklearn.preprocessing import StandardScaler
 import statsmodels.api as sm
 
 from .logging_utils import get_logger
+from .reason_codes import annotate_reason_record
 
 logger = get_logger(__name__)
 
@@ -156,13 +157,13 @@ def estimate_exosome_fraction_with_uncertainty(
 
     if effect_cells is None or effect_exosomes is None:
         base["reason"] = "Missing effect tables for cells and/or exosomes."
-        return base
+        return annotate_reason_record(base)
     if effect_cells.empty or effect_exosomes.empty:
         base["reason"] = "Empty effect tables for cells and/or exosomes."
-        return base
+        return annotate_reason_record(base)
     if "mean_effect" not in effect_cells.columns or "mean_effect" not in effect_exosomes.columns:
         base["reason"] = "Effect tables must contain a 'mean_effect' column."
-        return base
+        return annotate_reason_record(base)
 
     common = effect_cells.index.intersection(effect_exosomes.index)
     n_common = int(len(common))
@@ -172,7 +173,7 @@ def estimate_exosome_fraction_with_uncertainty(
         base["reason"] = (
             f"Only {n_common} common tissues (< {int(min_common_tissues)} required)."
         )
-        return base
+        return annotate_reason_record(base)
 
     cells = effect_cells.loc[common, "mean_effect"].astype(float).to_numpy()
     exo = effect_exosomes.loc[common, "mean_effect"].astype(float).to_numpy()
@@ -187,7 +188,7 @@ def estimate_exosome_fraction_with_uncertainty(
             f"Only {n_used} finite common tissues after filtering "
             f"(< {int(min_common_tissues)} required)."
         )
-        return base
+        return annotate_reason_record(base)
 
     cells_median_abs = float(np.median(np.abs(cells)))
     exo_median_abs = float(np.median(np.abs(exo)))
@@ -198,7 +199,7 @@ def estimate_exosome_fraction_with_uncertainty(
         base["reason"] = (
             "Cell-effect denominator is too close to zero; ratio unstable."
         )
-        return base
+        return annotate_reason_record(base)
 
     ratio_obs = float(exo_median_abs / cells_median_abs)
     base["ratio"] = ratio_obs
@@ -238,7 +239,7 @@ def estimate_exosome_fraction_with_uncertainty(
     base["available"] = True
     base["estimable"] = True
     base["reason"] = ""
-    return base
+    return annotate_reason_record(base)
 
 
 def build_plasma_state_score(

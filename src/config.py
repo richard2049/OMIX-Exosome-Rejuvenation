@@ -1,9 +1,8 @@
 """
 config.py
 
-Typed configuration objects and defaults for the rejuvenation/exosome
-pipeline, including dataset paths (OMIX IDs), column candidates, and
-analysis hyperparameters used by run_pipeline.py.
+Typed configuration objects and defaults for the OMIX Exosome Rejuvenation pipeline, including
+dataset paths, metadata-column candidates, and analysis hyperparameters.
 """
 
 from __future__ import annotations
@@ -23,19 +22,18 @@ class OmixPaths:
 @dataclass
 class PipelineConfig:
     """
-    Configuration for the lightweight SRSC rejuvenation/exosome pipeline.
+    Configuration for the OMIX Exosome Rejuvenation pipeline.
 
-    This pipeline is designed for processed OMIX matrices (counts/beta/proteins)
-    and avoids raw FASTQ/BAM downloads.
-
-    The goal is mechanistic and translational inference, not full raw reproducibility.
+    The pipeline operates on released OMIX-derived matrices and metadata,
+    while keeping linkage-sensitive and attribution-sensitive analyses
+    behind explicit estimability gates.
     """
 
     # Core OMIX
     primate_bulk: OmixPaths
     data_profile: str = "auto"
     data_root: Optional[Path] = None
-    primate_bulk_age_col = "age"
+    primate_bulk_age_col: str = "age"
     primate_plasma: Optional[OmixPaths] = None
     primate_methylation: Optional[OmixPaths] = None
     mouse_exosome_bulk: Optional[OmixPaths] = None
@@ -43,14 +41,14 @@ class PipelineConfig:
     min_samples_for_mediation: int = 12
     min_samples_per_group_for_rejuv: int = 2
     mediation_bootstrap: int = 500
-    clock_model: str = "ridge"  # or whatever you implemented
+    clock_model: str = "ridge"
     control_label: str = "Control"
     primate_treated_label: str = "O_GES"
     primate_control_labels: Optional[List[str]] = None
     top_genes_per_tissue: int = 100
     top_plasma_biomarkers: int = 50
     random_seed: int = 42
-    focus_genes: list[str] = ("FOXO3", "SRC")
+    focus_genes: tuple[str, ...] = ("FOXO3", "SRC")
     tissue_weighting: str = "uniform"
     exosome_fraction_method: str = "correlation_ratio"
     exosome_fraction_bootstrap: int = 2000
@@ -95,11 +93,16 @@ class PipelineConfig:
 
     # Feature selection
     n_top_features_expr: int = 0
-    n_top_features_clock: int = 2000
     n_top_features_proxy: int = 1000
 
     # Plasma score
     n_top_plasma_features: int = 50
+    enable_plasma_age_axis: bool = True
+    plasma_axis_young_labels: Optional[List[str]] = None
+    plasma_axis_old_control_labels: Optional[List[str]] = None
+    plasma_axis_min_group_samples: int = 2
+    plasma_axis_min_non_nan_frac: float = 0.8
+    plasma_axis_min_linked_animals: int = 8
     sensitivity_top_feature_thresholds: Optional[List[int]] = None
     plasma_biomarker_min_pairs: int = 8
     plasma_biomarker_bootstrap: int = 120
@@ -111,8 +114,8 @@ class PipelineConfig:
     n_bootstrap: int = 2000
 
     # Output
-    results_dir: Path = Path("../results")
-    figures_dir: Path = Path("../figures")
+    results_dir: Path = Path("results")
+    figures_dir: Path = Path("figures")
 
     # Optional gene sets
     gmt_path: Optional[Path] = None
@@ -160,6 +163,14 @@ class PipelineConfig:
 
         self.primate_control_labels = self.primate_control_labels or [
             "Y_C", "M_C", "O_C", "O_WT", "O_V"
+        ]
+        self.plasma_axis_young_labels = self.plasma_axis_young_labels or ["Y", "Y_C"]
+        self.plasma_axis_old_control_labels = self.plasma_axis_old_control_labels or [
+            "O_C",
+            "O_WT",
+            "O_V",
+            "WT",
+            "V",
         ]
         self.mouse_control_labels = self.mouse_control_labels or [
             "Veh", "WT", "Ctrl", "Baseline"

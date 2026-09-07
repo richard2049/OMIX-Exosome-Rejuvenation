@@ -135,8 +135,11 @@ def build_proxy_rejuvenation_score(
         rejuvenation_score = chronological_age - predicted_biological_age
 
     So:
-      - negative values = sample looks biologically YOUNGER than its chronological age
-      - positive values = sample looks biologically OLDER
+      - positive values = sample looks younger-like than its chronological age
+      - negative values = sample looks older-like than its chronological age
+
+    This score is the sign inverse of ``delta_age``, which is defined elsewhere
+    as predicted age minus chronological age.
 
     Parameters
     ----------
@@ -171,7 +174,7 @@ def build_proxy_rejuvenation_score(
     # Optional: warn if we lose many rows
     valid_frac = pred.notna().mean()
     if valid_frac < 0.5:
-        print(
+        logger.warning(
             f"build_proxy_rejuvenation_score: only {valid_frac:.2%} of rows have "
             f"numeric '{pred_age_col}'. Rejuvenation scores may be unreliable."
         )

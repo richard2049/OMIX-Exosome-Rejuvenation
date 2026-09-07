@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this code, please cite this repository."
-title: "SRSC: Exploratory cross-species translational analysis of exosome interventions"
+title: "OMIX Exosome Rejuvenation: Primate multi-omics evidence and attribution guardrails"
 authors:
   - family-names: "Marín Bautista"
     given-names: "Ricardo"

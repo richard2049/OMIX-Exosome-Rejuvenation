@@ -8,6 +8,7 @@ PNG figures for downstream inspection.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 from typing import Optional
 
@@ -212,7 +213,8 @@ def plot_rejuvenation_by_group(
         Column with treatment / group labels (e.g. Y_C, O_C, O_V, SRC, etc.).
     rejuvenation_col : str
         Column with rejuvenation score in "delta years" (or normalized units).
-        Convention: negative = biologically younger than chronological.
+        Convention: positive = younger-like than chronological. This is the
+        sign inverse of ``delta_age``.
     out_path : Path
         Where to save the PNG.
     tissue_col : str, optional
@@ -298,7 +300,7 @@ def plot_rejuvenation_by_group(
     ax.set_xticklabels(xtick_labels, rotation=30, ha="right")
 
     ax.set_xlabel(group_col)
-    ax.set_ylabel("Rejuvenation score (Delta units; negative = younger)")
+    ax.set_ylabel("Rejuvenation score (years; positive = younger-like)")
 
     # Horizontal reference line at 0 (no rejuvenation)
     ax.axhline(0.0, linestyle="--", linewidth=1)
@@ -323,17 +325,14 @@ def plot_rejuvenation_by_group(
 def plot_mediation_effects_bar(
     med: pd.DataFrame,
     out_path: Path,
-    title: str = "Decomposition of treatment effect (cells vs exosomes)",
+    title: str = "Linked mediation estimates (diagnostic)",
 ) -> None:
     """
-    Simple bar plot for mediation results.
+    Plot total, direct, and indirect mediation estimates.
 
-    Expects a DataFrame `med` with at least the columns:
-      - 'total_effect'
-      - 'direct_effect'
-      - 'indirect_effect'
-
-    Typically this would be the summary row from simple_mediation_bootstrap.
+    The current schema uses ``Total``, ``ADE``, and ``ACME``. Historical
+    ``*_effect`` columns remain accepted so older result tables can still be
+    inspected. Bootstrap confidence intervals are shown when available.
     """
     if med is None or (isinstance(med, pd.DataFrame) and med.empty):
         logger.warning("plot_mediation_effects_bar: empty mediation results; skipping.")
@@ -347,34 +346,103 @@ def plot_mediation_effects_bar(
     else:
         df = med.copy()
 
-    required = ["total_effect", "direct_effect", "indirect_effect"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
+    metric_specs = [
+        ("Total", "total_effect", "Total_CI", "total_ci_low", "total_ci_high", "Total effect"),
+        ("ADE", "direct_effect", "ADE_CI", "direct_ci_low", "direct_ci_high", "Direct effect (ADE)"),
+        ("ACME", "indirect_effect", "ACME_CI", "indirect_ci_low", "indirect_ci_high", "Indirect effect (ACME)"),
+    ]
+    missing_metrics = [
+        canonical
+        for canonical, legacy, *_ in metric_specs
+        if canonical not in df.columns and legacy not in df.columns
+    ]
+    if missing_metrics:
         logger.warning(
-            "plot_mediation_effects_bar: missing columns %s; expected %s. Skipping.",
-            missing,
-            required,
+            "plot_mediation_effects_bar: missing mediation metrics %s; accepted schemas are "
+            "Total/ADE/ACME or total_effect/direct_effect/indirect_effect. Skipping.",
+            missing_metrics,
         )
         return
 
     row = df.iloc[0]
-    effects = [
-        float(row["total_effect"]),
-        float(row["direct_effect"]),
-        float(row["indirect_effect"]),
-    ]
-    labels = ["Total", "Direct (cells)", "Indirect (exo)"]
 
-    plt.figure(figsize=(6, 4))
-    plt.bar(labels, effects)
-    plt.axhline(0.0, linestyle="--", linewidth=1)
+    def parse_ci(value: object) -> tuple[float, float]:
+        if isinstance(value, str):
+            try:
+                value = ast.literal_eval(value)
+            except (SyntaxError, ValueError):
+                return np.nan, np.nan
+        if isinstance(value, (tuple, list, np.ndarray)) and len(value) >= 2:
+            low = pd.to_numeric(pd.Series([value[0]]), errors="coerce").iloc[0]
+            high = pd.to_numeric(pd.Series([value[1]]), errors="coerce").iloc[0]
+            return float(low), float(high)
+        return np.nan, np.nan
 
-    plt.ylabel("Effect size (Delta years or standardized units)")
-    plt.title(title)
+    effects = []
+    intervals = []
+    labels = []
+    for canonical, legacy, ci_col, low_col, high_col, label in metric_specs:
+        effect_col = canonical if canonical in df.columns else legacy
+        effect = pd.to_numeric(pd.Series([row.get(effect_col)]), errors="coerce").iloc[0]
+        if ci_col in df.columns:
+            low, high = parse_ci(row.get(ci_col))
+        elif low_col in df.columns and high_col in df.columns:
+            low = pd.to_numeric(pd.Series([row.get(low_col)]), errors="coerce").iloc[0]
+            high = pd.to_numeric(pd.Series([row.get(high_col)]), errors="coerce").iloc[0]
+            low, high = float(low), float(high)
+        else:
+            low, high = np.nan, np.nan
+        effects.append(float(effect))
+        intervals.append((low, high))
+        labels.append(label)
+
+    if not np.isfinite(effects).all():
+        logger.warning("plot_mediation_effects_bar: non-finite mediation estimates; skipping.")
+        return
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.6))
+    x = np.arange(len(effects))
+    ax.bar(x, effects, color=["#496A81", "#2A9D8F", "#E9A23B"], width=0.68)
+    ax.axhline(0.0, color="#343A40", linestyle="--", linewidth=1)
+
+    intervals_available = 0
+    intervals_crossing_zero = 0
+    for idx, (effect, (low, high)) in enumerate(zip(effects, intervals)):
+        if np.isfinite(low) and np.isfinite(high) and low <= effect <= high:
+            ax.errorbar(
+                idx,
+                effect,
+                yerr=[[effect - low], [high - effect]],
+                fmt="none",
+                ecolor="#20252B",
+                elinewidth=1.2,
+                capsize=4,
+            )
+            intervals_available += 1
+            intervals_crossing_zero += int(low <= 0 <= high)
+
+    ax.set_xticks(x, labels)
+    ax.set_ylabel("Estimated effect on rejuvenation score")
+    fig.suptitle(title, x=0.12, y=0.98, ha="left", fontsize=14)
+    if intervals_available:
+        fig.text(
+            0.12,
+            0.925,
+            f"{intervals_crossing_zero}/{intervals_available} bootstrap 95% CIs cross zero",
+            fontsize=9,
+            color="#555B61",
+        )
+    fig.text(
+        0.12,
+        0.025,
+        "Diagnostic association estimates; they do not establish exosome causality.",
+        fontsize=8.5,
+        color="#555B61",
+    )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=150)
-    plt.close()
+    fig.tight_layout(rect=(0, 0.08, 1, 0.88))
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
     logger.info("Saved mediation effects bar plot: %s", out_path)

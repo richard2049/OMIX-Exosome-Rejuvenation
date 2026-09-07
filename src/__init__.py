@@ -1,1 +1,1 @@
-"""SRSC analysis package."""
+"""OMIX exosome-rejuvenation analysis package."""

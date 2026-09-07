@@ -1,0 +1,8 @@
+name: srsc-omix007582-r
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - r-base
+  - r-biocmanager

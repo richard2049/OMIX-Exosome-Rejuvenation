@@ -1,5 +1,5 @@
 """
-Cross-species attribution and validation helpers for the SRSC pipeline.
+Cross-species attribution and validation helpers for the OMIX Exosome Rejuvenation pipeline.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import pandas as pd
 
 from .clocks import predict_biological_age, train_transcriptomic_clock
 from .logging_utils import get_logger
+from .reason_codes import annotate_reason_fields
 
 logger = get_logger(__name__)
 
@@ -162,7 +163,7 @@ def compute_mouse_exosome_tissue_effects(
     rows = []
 
     if expr_log is None or meta is None or expr_log.empty or meta.empty:
-        return pd.DataFrame(
+        return annotate_reason_fields(pd.DataFrame(
             [
                 {
                     "tissue": "NA",
@@ -179,7 +180,7 @@ def compute_mouse_exosome_tissue_effects(
                     "evidence_level": 0,
                 }
             ]
-        )
+        ))
 
     meta = meta.copy()
     meta[sample_id_col] = meta[sample_id_col].astype(str)
@@ -232,7 +233,6 @@ def compute_mouse_exosome_tissue_effects(
                 ref[[sample_id_col, age_col]].copy(),
                 age_col=age_col,
                 model="ridge",
-                n_top_features=None,
                 n_splits=min(5, max(2, int(ref[age_col].nunique()))),
                 random_state=random_state,
                 cv_group_col=None,
@@ -334,13 +334,13 @@ def compute_mouse_exosome_tissue_effects(
                 }
             )
 
-    return pd.DataFrame(rows)
+    return annotate_reason_fields(pd.DataFrame(rows))
 
 
 def summarize_mouse_exosome_signatures(mouse_effects: pd.DataFrame) -> pd.DataFrame:
     rows = []
     if mouse_effects is None or mouse_effects.empty:
-        return pd.DataFrame(
+        return annotate_reason_fields(pd.DataFrame(
             [
                 {
                     "contrast": "NA",
@@ -354,7 +354,7 @@ def summarize_mouse_exosome_signatures(mouse_effects: pd.DataFrame) -> pd.DataFr
                     "evidence_level": 0,
                 }
             ]
-        )
+        ))
 
     for contrast, sub in mouse_effects.groupby("contrast"):
         ok = sub.loc[sub["estimable"].astype(bool)].copy()
@@ -397,7 +397,7 @@ def summarize_mouse_exosome_signatures(mouse_effects: pd.DataFrame) -> pd.DataFr
             }
         )
 
-    return pd.DataFrame(rows)
+    return annotate_reason_fields(pd.DataFrame(rows))
 
 
 def _alignment_frame(
@@ -484,7 +484,7 @@ def compute_exosome_alignment_tables(
                 }
             ]
         )
-        return stub, summary_stub
+        return annotate_reason_fields(stub), annotate_reason_fields(summary_stub)
 
     prim = primate_effects.copy()
     if "tissue" in prim.columns:
@@ -688,7 +688,7 @@ def compute_exosome_alignment_tables(
             )
             summary_df["preferred_alignment"] = preferred
 
-    return pd.DataFrame(by_tissue_rows), summary_df
+    return annotate_reason_fields(pd.DataFrame(by_tissue_rows)), annotate_reason_fields(summary_df)
 
 
 def assign_group_stage_age(
@@ -722,7 +722,7 @@ def summarize_multimodal_concordance(
     random_state: int = 42,
 ) -> pd.DataFrame:
     if transcript_effects is None or transcript_effects.empty or methylation_effects is None or methylation_effects.empty:
-        return pd.DataFrame(
+        return annotate_reason_fields(pd.DataFrame(
             [
                 {
                     "available": False,
@@ -735,7 +735,7 @@ def summarize_multimodal_concordance(
                     "evidence_level": 0,
                 }
             ]
-        )
+        ))
 
     tx = transcript_effects.copy()
     me = methylation_effects.copy()
@@ -749,7 +749,7 @@ def summarize_multimodal_concordance(
         me["effect_median"] if "effect_median" in me.columns else me["mean_effect"],
     )
     if len(frame) < int(min_common_tissues):
-        return pd.DataFrame(
+        return annotate_reason_fields(pd.DataFrame(
             [
                 {
                     "n_common_tissues": int(len(frame)),
@@ -773,7 +773,7 @@ def summarize_multimodal_concordance(
                     "evidence_level": 0,
                 }
             ]
-        )
+        ))
 
     observed_similarity = float(frame["standardized_effect_similarity"].mean())
     rng = np.random.default_rng(random_state)
@@ -796,7 +796,7 @@ def summarize_multimodal_concordance(
             perm.append(float(perm_frame["standardized_effect_similarity"].mean()))
     perm_p = float(np.mean(np.asarray(perm, dtype=float) >= observed_similarity)) if perm else np.nan
 
-    return pd.DataFrame(
+    return annotate_reason_fields(pd.DataFrame(
         [
             {
                 "n_common_tissues": int(len(frame)),
@@ -818,7 +818,7 @@ def summarize_multimodal_concordance(
                 "evidence_level": 1,
             }
         ]
-    )
+    ))
 
 
 def read_subset_sample_info(zip_path: Path) -> pd.DataFrame:
@@ -897,4 +897,4 @@ def build_subset_validation_table(
         )
         row["evidence_level"] = 0
 
-    return pd.DataFrame([row])
+    return annotate_reason_fields(pd.DataFrame([row]))

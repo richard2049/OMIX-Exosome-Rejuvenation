@@ -16,12 +16,11 @@ It assumes:
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 from scipy import stats
-from sklearn.linear_model import LinearRegression
 from .logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -125,6 +124,55 @@ def _group_effect(
     }
 
 
+def annotate_effect_uncertainty(
+    df: pd.DataFrame,
+    effect_col: str = "effect_median",
+    ci_low_col: str = "ci_low",
+    ci_high_col: str = "ci_high",
+) -> pd.DataFrame:
+    """
+    Add conservative interpretation fields for delta-age effect summaries.
+
+    Effects remain in their original units. The added signal-to-uncertainty
+    score is only a prioritization aid: it must not be interpreted as a
+    p-value, posterior probability, or normalized treatment effect.
+    """
+    out = df.copy()
+    if out.empty:
+        return out
+
+    default = pd.Series(np.nan, index=out.index, dtype=float)
+    effect = pd.to_numeric(out[effect_col] if effect_col in out.columns else default, errors="coerce")
+    ci_low = pd.to_numeric(out[ci_low_col] if ci_low_col in out.columns else default, errors="coerce")
+    ci_high = pd.to_numeric(out[ci_high_col] if ci_high_col in out.columns else default, errors="coerce")
+
+    ci_width = ci_high - ci_low
+    finite_ci = ci_low.notna() & ci_high.notna() & (ci_width > 0)
+    ci_crosses_zero = finite_ci & (ci_low <= 0) & (ci_high >= 0)
+    ci_excludes_zero = finite_ci & ((ci_high < 0) | (ci_low > 0))
+
+    direction = pd.Series("unresolved", index=out.index, dtype="object")
+    direction.loc[effect < 0] = "younger_shift"
+    direction.loc[effect > 0] = "older_shift"
+
+    interpretation = pd.Series("uncertain_missing_ci", index=out.index, dtype="object")
+    interpretation.loc[ci_crosses_zero & (direction == "younger_shift")] = "nominal_younger_shift_ci_crosses_zero"
+    interpretation.loc[ci_crosses_zero & (direction == "older_shift")] = "nominal_older_shift_ci_crosses_zero"
+    interpretation.loc[ci_excludes_zero & (direction == "younger_shift")] = "supported_younger_shift_ci_excludes_zero"
+    interpretation.loc[ci_excludes_zero & (direction == "older_shift")] = "supported_older_shift_ci_excludes_zero"
+    interpretation.loc[finite_ci & (direction == "unresolved")] = "near_zero_effect"
+
+    signal_to_uncertainty = effect.abs() / ci_width.replace(0, np.nan)
+    signal_to_uncertainty = signal_to_uncertainty.where(finite_ci)
+
+    out["ci_width"] = ci_width
+    out["ci_crosses_zero"] = ci_crosses_zero.fillna(False)
+    out["effect_direction"] = direction
+    out["interpretation_label"] = interpretation
+    out["signal_to_uncertainty"] = signal_to_uncertainty
+    return out
+
+
 def summarize_rejuvenation_by_tissue(
     meta_with_delta: pd.DataFrame,
     tissue_col: str,
@@ -165,7 +213,7 @@ def summarize_rejuvenation_by_tissue(
         }
         rows.append(eff_row)
 
-    return pd.DataFrame(rows)
+    return annotate_effect_uncertainty(pd.DataFrame(rows), effect_col="effect_median")
 
 
 def summarise_global_rejuvenation(
@@ -603,162 +651,3 @@ def compute_plasma_biomarkers(
             df.at[idx, "stable_association"] = stable_association
             df.at[idx, "stability_tested"] = True
     return df.drop(columns=["__row_id"], errors="ignore")
-
-def simple_mediation_bootstrap(
-    df: pd.DataFrame,
-    x_col: str,
-    m_col: str,
-    y_col: str,
-    n_boot: int = 1000,
-    seed: int = 42,
-) -> dict:
-    """
-    Simple (non-parametric) mediation bootstrap:
-    X -> M -> Y, with Y also adjusted by X.
-
-    Returns:
-      - total_effect
-      - direct_effect
-      - indirect_effect
-      - bootstrap 95% CIs
-    """
-    df = df[[x_col, m_col, y_col]].dropna().copy()
-    if df.shape[0] < 10:
-        logger.warning(
-            "simple_mediation_bootstrap: too few samples (n=%d). Returning NaNs.",
-            df.shape[0],
-        )
-        return {
-            "n_samples": int(df.shape[0]),
-            "total_effect": np.nan,
-            "direct_effect": np.nan,
-            "indirect_effect": np.nan,
-            "total_ci_low": np.nan,
-            "total_ci_high": np.nan,
-            "direct_ci_low": np.nan,
-            "direct_ci_high": np.nan,
-            "indirect_ci_low": np.nan,
-            "indirect_ci_high": np.nan,
-        }
-
-    rng = np.random.default_rng(seed)
-
-    X = df[[x_col]].to_numpy(dtype=float)
-    M = df[[m_col]].to_numpy(dtype=float)
-    Y = df[[y_col]].to_numpy(dtype=float)
-
-    # a) Total effect: Y ~ X
-    reg_total = LinearRegression().fit(X, Y)
-    total_effect = float(reg_total.coef_[0, 0])
-
-    # b) Direct and mediated effects:
-    #    1) M ~ X  -> coefficient a
-    reg_a = LinearRegression().fit(X, M)
-    a = float(reg_a.coef_[0, 0])
-
-    #    2) Y ~ X + M -> coefficient b (M), coefficient c' (X)
-    XM = np.concatenate([X, M], axis=1)
-    reg_b = LinearRegression().fit(XM, Y)
-    b = float(reg_b.coef_[0, 1])  # coefficient for M
-    direct_effect = float(reg_b.coef_[0, 0])  # coefficient for X
-    indirect_effect = a * b
-
-    total_samples = []
-    direct_samples = []
-    indirect_samples = []
-
-    for _ in range(n_boot):
-        idx = rng.integers(0, df.shape[0], size=df.shape[0])
-        Xb = X[idx]
-        Mb = M[idx]
-        Yb = Y[idx]
-
-        reg_total_b = LinearRegression().fit(Xb, Yb)
-        total_b = float(reg_total_b.coef_[0, 0])
-
-        reg_a_b = LinearRegression().fit(Xb, Mb)
-        a_b = float(reg_a_b.coef_[0, 0])
-
-        XM_b = np.concatenate([Xb, Mb], axis=1)
-        reg_b_b = LinearRegression().fit(XM_b, Yb)
-        b_b = float(reg_b_b.coef_[0, 1])
-        direct_b = float(reg_b_b.coef_[0, 0])
-        indirect_b = a_b * b_b
-
-        total_samples.append(total_b)
-        direct_samples.append(direct_b)
-        indirect_samples.append(indirect_b)
-
-    def ci(arr):
-        lo, hi = np.percentile(arr, [2.5, 97.5])
-        return float(lo), float(hi)
-
-    t_lo, t_hi = ci(total_samples)
-    d_lo, d_hi = ci(direct_samples)
-    i_lo, i_hi = ci(indirect_samples)
-
-    out = {
-        "n_samples": int(df.shape[0]),
-        "total_effect": total_effect,
-        "direct_effect": direct_effect,
-        "indirect_effect": indirect_effect,
-        "total_ci_low": t_lo,
-        "total_ci_high": t_hi,
-        "direct_ci_low": d_lo,
-        "direct_ci_high": d_hi,
-        "indirect_ci_low": i_lo,
-        "indirect_ci_high": i_hi,
-    }
-    logger.info("Mediation bootstrap done: %s", out)
-    return out
-
-def run_simple_causal_model(
-    prim_meta: pd.DataFrame,
-    prim_plasma_meta: pd.DataFrame,
-    cfg,
-) -> Optional[pd.DataFrame]:
-    """
-    Phase 4 helper: build a simple causal model:
-    group_binary -> plasma_state_score -> rejuvenation_score
-    on matched animals.
-    """
-    if "animal_id" not in prim_meta.columns or "animal_id" not in prim_plasma_meta.columns:
-        logger.warning("run_simple_causal_model: animal_id missing; cannot align plasma and tissue.")
-        return None
-
-    if "plasma_state_score" not in prim_plasma_meta.columns:
-        logger.warning("run_simple_causal_model: plasma_state_score missing; skipping mediation.")
-        return None
-
-    if "rejuvenation_score" not in prim_meta.columns:
-        logger.warning("run_simple_causal_model: rejuvenation_score missing; skipping mediation.")
-        return None
-
-    meta = prim_meta.copy()
-    if "group_binary" not in meta.columns:
-        meta["group_binary"] = (meta["group"] == cfg.primate_treated_label).astype(int)
-
-    merged = meta.merge(
-        prim_plasma_meta[["animal_id", "plasma_state_score"]],
-        on="animal_id",
-        how="inner",
-    )
-    merged = merged.dropna(subset=["group_binary", "plasma_state_score", "rejuvenation_score"])
-
-    if merged.shape[0] < cfg.min_samples_for_mediation:
-        logger.warning(
-            "run_simple_causal_model: too few matched samples for mediation (n=%d).",
-            merged.shape[0],
-        )
-        return None
-
-    med = simple_mediation_bootstrap(
-        merged,
-        x_col="group_binary",
-        m_col="plasma_state_score",
-        y_col="rejuvenation_score",
-        n_boot=cfg.mediation_bootstrap,
-        seed=cfg.random_seed,
-    )
-
-    return pd.DataFrame([med])

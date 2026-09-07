@@ -12,6 +12,15 @@ from typing import Any, Dict, Sequence
 
 import pandas as pd
 
+from .reason_codes import (
+    INSUFFICIENT_LINKED_ANIMALS,
+    PLASMA_ANIMAL_LINKAGE_COLLISION,
+    PLASMA_BULK_ANIMAL_LINKAGE_MISSING,
+    PLASMA_LINKAGE_CONFIDENCE_MISSING,
+    OK,
+    missing_author_key_for_reason_code,
+)
+
 
 def _mode_or_first(s: pd.Series) -> str:
     s = s.dropna().astype(str)
@@ -72,6 +81,7 @@ def audit_primate_plasma_linkage(
     n_overlap_treated = 0
     n_overlap_control = 0
     mapping_coverage = 0.0
+    mapping_collision_count = 0
 
     if has_plasma_animal_col and animal_confidence_col in prim_plasma_meta.columns:
         plasma_conf = (
@@ -84,10 +94,10 @@ def audit_primate_plasma_linkage(
         plasma_hc_vals = prim_plasma_meta.loc[plasma_conf, animal_col].dropna().astype(str)
         n_plasma_high_conf_non_null = int(plasma_hc_vals.shape[0])
         plasma_hc_ids = set(plasma_hc_vals.tolist())
+        mapping_collision_count = int(plasma_hc_vals.duplicated().sum())
     elif has_plasma_animal_col:
-        # Backward-compatible fallback: treat any non-null animal_id as high-confidence.
-        plasma_hc_ids = set(plasma_ids)
-        n_plasma_high_conf_non_null = int(plasma_non_null)
+        # Linkage without explicit confidence provenance is not causal-analysis ready.
+        plasma_hc_ids = set()
     else:
         plasma_hc_ids = set()
 
@@ -176,6 +186,7 @@ def audit_primate_plasma_linkage(
         "overlap_fraction_prim_animals": overlap_fraction_prim,
         "overlap_fraction_plasma_animals": overlap_fraction_plasma,
         "mapping_coverage": mapping_coverage,
+        "mapping_collision_count": mapping_collision_count,
         "group_concordance_on_overlap": group_concordance,
         "sex_concordance_on_overlap": sex_concordance,
     }
@@ -190,6 +201,9 @@ def build_estimability_report(
 ) -> Dict[str, Any]:
     has_prim = bool(linkage_audit.get("has_prim_animal_id_col", False))
     has_plasma = bool(linkage_audit.get("has_plasma_animal_id_col", False))
+    has_plasma_confidence = bool(
+        linkage_audit.get("has_plasma_animal_id_confidence_col", False)
+    )
     n_overlap = int(
         linkage_audit.get(
             "n_overlap_animal_ids_high_conf",
@@ -199,15 +213,34 @@ def build_estimability_report(
     )
     n_overlap_treated = int(linkage_audit.get("n_overlap_treated_animals", 0) or 0)
     n_overlap_control = int(linkage_audit.get("n_overlap_control_animals", 0) or 0)
+    mapping_collision_count = int(linkage_audit.get("mapping_collision_count", 0) or 0)
 
     if not has_prim or not has_plasma:
         tier = "unlinked"
         can_do_mediation = False
         reason = "animal_id column missing in bulk and/or plasma metadata."
+        reason_code = PLASMA_BULK_ANIMAL_LINKAGE_MISSING
+    elif not has_plasma_confidence:
+        tier = "unlinked"
+        can_do_mediation = False
+        reason = (
+            "Plasma animal_id confidence column is missing; linkage confidence provenance "
+            "is required for individual-level inference."
+        )
+        reason_code = PLASMA_LINKAGE_CONFIDENCE_MISSING
+    elif mapping_collision_count > 0:
+        tier = "partially_linked"
+        can_do_mediation = False
+        reason = (
+            f"Detected {mapping_collision_count} duplicate high-confidence plasma-to-animal "
+            "mapping collision(s); linked causal analysis requires one plasma row per animal."
+        )
+        reason_code = PLASMA_ANIMAL_LINKAGE_COLLISION
     elif n_overlap <= 0:
         tier = "unlinked"
         can_do_mediation = False
         reason = "No overlapping high-confidence animal_id values across bulk and plasma metadata."
+        reason_code = PLASMA_BULK_ANIMAL_LINKAGE_MISSING
     elif n_overlap < int(min_overlap_animals):
         tier = "partially_linked"
         can_do_mediation = False
@@ -215,6 +248,7 @@ def build_estimability_report(
             f"Only {n_overlap} overlapping high-confidence animals (< {int(min_overlap_animals)} "
             "minimum required for linked analysis)."
         )
+        reason_code = INSUFFICIENT_LINKED_ANIMALS
     elif n_overlap_treated < int(min_treated_overlap):
         tier = "partially_linked"
         can_do_mediation = False
@@ -222,6 +256,7 @@ def build_estimability_report(
             f"Only {n_overlap_treated} overlapping treated animals (< {int(min_treated_overlap)} "
             "minimum required)."
         )
+        reason_code = INSUFFICIENT_LINKED_ANIMALS
     elif n_overlap_control < int(min_control_overlap):
         tier = "partially_linked"
         can_do_mediation = False
@@ -229,6 +264,7 @@ def build_estimability_report(
             f"Only {n_overlap_control} overlapping control animals (< {int(min_control_overlap)} "
             "minimum required)."
         )
+        reason_code = INSUFFICIENT_LINKED_ANIMALS
     elif n_overlap < int(min_samples_for_mediation):
         tier = "partially_linked"
         can_do_mediation = False
@@ -236,10 +272,12 @@ def build_estimability_report(
             f"Only {n_overlap} overlapping animals (< {int(min_samples_for_mediation)} "
             "minimum for stable mediation)."
         )
+        reason_code = INSUFFICIENT_LINKED_ANIMALS
     else:
         tier = "fully_linked"
         can_do_mediation = True
         reason = "Sufficient animal-level overlap for mediation/decomposition."
+        reason_code = OK
 
     return {
         "available": True,
@@ -249,9 +287,14 @@ def build_estimability_report(
         "n_overlap_animal_ids": n_overlap,
         "n_overlap_treated_animals": n_overlap_treated,
         "n_overlap_control_animals": n_overlap_control,
+        "mapping_collision_count": mapping_collision_count,
         "min_overlap_animals": int(min_overlap_animals),
         "min_treated_overlap": int(min_treated_overlap),
         "min_control_overlap": int(min_control_overlap),
         "min_samples_for_mediation": int(min_samples_for_mediation),
         "reason": reason,
+        "reason_code": reason_code,
+        "missing_author_key": (
+            "" if reason_code == OK else missing_author_key_for_reason_code(reason_code)
+        ),
     }
