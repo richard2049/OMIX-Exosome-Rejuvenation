@@ -191,3 +191,24 @@ The paper does not present one single `n` for every assay. Sample size varies by
    - exploratory causal decomposition layers that go beyond what the paper directly reports.
 3. Use `Documents/group_label_crosswalk.md` when translating article cohort names into repo group names.
 4. Any claim equating repo `O_GES` directly with article `A4-SRC`, or repo `O_V` with article `A4-Ctrl`, should still be phrased as a cross-source mapping rather than a verbatim article label substitution.
+
+## Inference Structure
+
+The study combines modalities whose samples are not uniformly linked at the
+animal level. Consequently, the availability of transcriptomic, plasma,
+methylation, and exosome-related data does not imply that all cross-modal
+quantities are estimable.
+
+Analyses involving cross-modality linkage, mediation, exosome attribution, or
+cross-species mechanistic support are governed by:
+
+[`Documents/inference_contract.md`](inference_contract.md)
+
+In particular:
+
+- linkage must be demonstrated rather than inferred;
+- estimability is evaluated before model execution or interpretation;
+- mediation requires compatible animal-level observations;
+- exosome association is distinct from exosome causality;
+- mouse evidence is mechanism-supportive rather than direct macaque or human
+  validation.

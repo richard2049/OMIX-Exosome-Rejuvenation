@@ -66,7 +66,6 @@ def train_transcriptomic_clock(
     meta: pd.DataFrame,
     age_col: str = "agenumb",
     model: Optional[str] = "ridge",
-    n_top_features: Optional[int] = None,
     n_splits: int = 5,
     random_state: int = 42,
     cv_group_col: Optional[str] = None,
@@ -85,9 +84,6 @@ def train_transcriptomic_clock(
         Column in meta containing chronological age (numeric).
     model : {"ridge", None}, optional
         Type of regressor to use (currently only Ridge).
-    n_top_features : int or None
-        (Currently ignored inside this function; feature reduction is
-        expected to be handled upstream in the pipeline.)
     n_splits : int
         Number of CV folds.
     random_state : int
@@ -131,6 +127,10 @@ def train_transcriptomic_clock(
 
     meta_train = meta_train.set_index("sample_id").loc[sample_ids]
     X = expr_log.loc[:, sample_ids].T  # samples x features
+    # Ridge's automatic dual solver can flag otherwise stable high-dimensional
+    # log-expression matrices in float32. Float64 removes that numerical artifact
+    # without changing the estimator or its scientific interpretation.
+    X_values = X.to_numpy(dtype=np.float64, copy=False)
     y = meta_train[age_col].astype(float).values
 
     feature_names_used = list(X.columns)
@@ -172,21 +172,21 @@ def train_transcriptomic_clock(
                 cv = GroupKFold(n_splits=cv_n_splits)
                 y_pred_cv = cross_val_predict(
                     base_estimator,
-                    X.values,
+                    X_values,
                     y,
                     cv=cv,
                     groups=group_values,
                 )
             else:
                 cv = KFold(n_splits=2, shuffle=True, random_state=random_state)
-                y_pred_cv = cross_val_predict(base_estimator, X.values, y, cv=cv)
+                y_pred_cv = cross_val_predict(base_estimator, X_values, y, cv=cv)
         else:
             logger.info(
                 "train_transcriptomic_clock: %s has <2 valid unique groups; using KFold.",
                 cv_group_col,
             )
             cv = KFold(n_splits=cv_n_splits, shuffle=True, random_state=random_state)
-            y_pred_cv = cross_val_predict(base_estimator, X.values, y, cv=cv)
+            y_pred_cv = cross_val_predict(base_estimator, X_values, y, cv=cv)
     else:
         if cv_group_col is not None:
             logger.info(
@@ -194,7 +194,7 @@ def train_transcriptomic_clock(
                 cv_group_col,
             )
         cv = KFold(n_splits=cv_n_splits, shuffle=True, random_state=random_state)
-        y_pred_cv = cross_val_predict(base_estimator, X.values, y, cv=cv)
+        y_pred_cv = cross_val_predict(base_estimator, X_values, y, cv=cv)
 
     # Metrics
     mae = mean_absolute_error(y, y_pred_cv)
@@ -215,6 +215,10 @@ def train_transcriptomic_clock(
         "cv_strategy": cv_strategy,
         "cv_n_splits": float(cv_n_splits),
         "cv_n_groups": cv_n_groups,
+        "n_features": float(X_values.shape[1]),
+        "input_dtype": str(X_values.dtype),
+        "ridge_alpha": 1.0,
+        "ridge_solver": "auto",
     }
 
     logger.info(
@@ -227,7 +231,7 @@ def train_transcriptomic_clock(
     )
 
     # Fit the model with all the data (on the same feature set X)
-    fitted_estimator = base_estimator.fit(X.values, y)
+    fitted_estimator = base_estimator.fit(X_values, y)
 
     # Wrap everything into a TrainedClock
     clock = TrainedClock(
@@ -257,7 +261,7 @@ def predict_biological_age(
     Use a trained transcriptomic clock to predict biological age.
 
     Assumes that `expr_log` has the same feature set (genes) as the matrix
-    used during training. This is true in the current SRSC pipeline, where
+    used during training. This is true in the OMIX Exosome Rejuvenation pipeline, where
     the same `expr_log` is passed to both training and prediction.
 
     Parameters
@@ -318,7 +322,7 @@ def predict_biological_age(
     # IMPORTANT: we assume here that the feature set (genes) is the same as
     # the one used during training. This holds in the current pipeline because
     # training and prediction both receive the same `expr_log`.
-    X_values = X_full.to_numpy()
+    X_values = X_full.to_numpy(dtype=np.float64, copy=False)
     y_pred = estimator.predict(X_values)
 
     pred_df = pd.DataFrame(

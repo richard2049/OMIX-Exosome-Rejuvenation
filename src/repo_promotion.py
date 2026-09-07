@@ -32,18 +32,26 @@ def _file_digest(path: Path) -> str:
 
 
 def load_promotion_manifest(path: Path) -> Dict[str, Any]:
-    manifest = json.loads(path.read_text(encoding="utf-8"))
-    manifest.setdefault("sync_files", [])
-    manifest.setdefault("optional_demo_files", [])
-    return manifest
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _iter_manifest_entries(manifest: Dict[str, Any], include_demo_data: bool) -> Iterable[tuple[str, str]]:
-    for rel_path in manifest.get("sync_files", []):
-        yield "sync", str(rel_path)
-    if include_demo_data:
-        for rel_path in manifest.get("optional_demo_files", []):
-            yield "demo_data", str(rel_path)
+def _iter_manifest_entries(manifest: Dict[str, Any], *, entry_key: str, category: str) -> Iterable[tuple[str, str]]:
+    for rel_path in manifest.get(entry_key, []):
+        yield category, str(rel_path)
+
+
+def _resolve_repo_file(root: Path, rel_path: str) -> Path:
+    relative = Path(rel_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"Manifest path must be relative and confined to the repository: {rel_path}")
+
+    resolved_root = root.resolve()
+    candidate = resolved_root / relative
+    try:
+        candidate.resolve(strict=False).relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError(f"Manifest path resolves outside the repository: {rel_path}") from exc
+    return candidate
 
 
 def build_promotion_plan(
@@ -51,12 +59,22 @@ def build_promotion_plan(
     source_root: Path,
     target_root: Path,
     manifest: Dict[str, Any],
-    include_demo_data: bool = False,
+    assets_manifest: Dict[str, Any] | None = None,
+    include_assets: bool = False,
 ) -> List[PromotionAction]:
     plan: List[PromotionAction] = []
-    for category, rel_path in _iter_manifest_entries(manifest, include_demo_data):
-        source_path = source_root / rel_path
-        target_path = target_root / rel_path
+    entries = list(_iter_manifest_entries(manifest, entry_key="sync_files", category="shared_code"))
+    if include_assets and assets_manifest is not None:
+        entries.extend(_iter_manifest_entries(assets_manifest, entry_key="asset_files", category="demo_asset"))
+
+    removal_paths = [str(path) for path in manifest.get("remove_files", [])]
+    overlap = {rel_path for _, rel_path in entries}.intersection(removal_paths)
+    if overlap:
+        raise ValueError(f"Manifest paths cannot be synchronized and removed together: {sorted(overlap)}")
+
+    for category, rel_path in entries:
+        source_path = _resolve_repo_file(source_root, rel_path)
+        target_path = _resolve_repo_file(target_root, rel_path)
         if not source_path.exists():
             plan.append(
                 PromotionAction(
@@ -100,13 +118,42 @@ def build_promotion_plan(
                 reason=reason,
             )
         )
+
+    for rel_path in removal_paths:
+        source_path = _resolve_repo_file(source_root, rel_path)
+        target_path = _resolve_repo_file(target_root, rel_path)
+        if not target_path.exists():
+            action = "skip"
+            reason = "Obsolete target file is already absent."
+        elif not target_path.is_file():
+            action = "blocked_remove"
+            reason = "Removal entries may target files only; directories are never removed."
+        else:
+            action = "remove"
+            reason = "Target file is explicitly listed as obsolete in the shared manifest."
+
+        plan.append(
+            PromotionAction(
+                rel_path=rel_path,
+                source_path=source_path,
+                target_path=target_path,
+                category="obsolete_file",
+                action=action,
+                reason=reason,
+            )
+        )
     return plan
 
 
 def apply_promotion_plan(plan: Iterable[PromotionAction]) -> Dict[str, int]:
-    counts = {"create": 0, "update": 0, "skip": 0, "missing_source": 0}
+    counts = {"create": 0, "update": 0, "remove": 0, "skip": 0, "missing_source": 0, "blocked_remove": 0}
     for item in plan:
         counts[item.action] = counts.get(item.action, 0) + 1
+        if item.action == "remove":
+            if not item.target_path.is_file():
+                raise ValueError(f"Refusing to remove a non-file target: {item.target_path}")
+            item.target_path.unlink()
+            continue
         if item.action not in {"create", "update"}:
             continue
         item.target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,23 +177,36 @@ def _default_target_root(source_root: Path) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Promote approved SRSC-work files into the clean SRSC repo.")
+    parser = argparse.ArgumentParser(
+        description="Promote approved OMIX Exosome Rejuvenation files into the clean public repository."
+    )
     parser.add_argument(
         "--target-root",
         type=Path,
         default=None,
-        help="Path to the clean SRSC repository. Defaults to the sibling SRSC directory.",
+        help="Path to the clean public repository. Defaults to the sibling SRSC directory.",
     )
     parser.add_argument(
         "--manifest",
         type=Path,
         default=None,
-        help="Promotion manifest JSON. Defaults to promotion_manifest.json in the source repo.",
+        help="Shared code/docs manifest JSON. Defaults to promotion_manifest.json in the source repo.",
+    )
+    parser.add_argument(
+        "--assets-manifest",
+        type=Path,
+        default=None,
+        help="Optional release/demo assets manifest JSON. Defaults to promotion_assets_manifest.json in the source repo.",
+    )
+    parser.add_argument(
+        "--include-assets",
+        action="store_true",
+        help="Also promote optional release/demo assets listed in the assets manifest.",
     )
     parser.add_argument(
         "--include-demo-data",
         action="store_true",
-        help="Also promote demo/sample files listed in optional_demo_files.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--apply",
@@ -158,26 +218,36 @@ def main() -> None:
     source_root = Path(__file__).resolve().parents[1]
     target_root = args.target_root.resolve() if args.target_root is not None else _default_target_root(source_root)
     manifest_path = args.manifest.resolve() if args.manifest is not None else source_root / "promotion_manifest.json"
+    assets_manifest_path = (
+        args.assets_manifest.resolve()
+        if args.assets_manifest is not None
+        else source_root / "promotion_assets_manifest.json"
+    )
+    include_assets = args.include_assets or args.include_demo_data
 
     manifest = load_promotion_manifest(manifest_path)
+    assets_manifest = load_promotion_manifest(assets_manifest_path) if include_assets else None
     plan = build_promotion_plan(
         source_root=source_root,
         target_root=target_root,
         manifest=manifest,
-        include_demo_data=args.include_demo_data,
+        assets_manifest=assets_manifest,
+        include_assets=include_assets,
     )
 
     logger.info("Source root: %s", source_root)
     logger.info("Target root: %s", target_root)
-    logger.info("Manifest: %s", manifest_path)
+    logger.info("Shared manifest: %s", manifest_path)
+    if include_assets:
+        logger.info("Assets manifest: %s", assets_manifest_path)
     for row in _plan_rows(plan):
-        logger.info("%s | %s | %s", row["action"].upper(), row["rel_path"], row["reason"])
+        logger.info("%s | %s | %s | %s", row["action"].upper(), row["category"], row["rel_path"], row["reason"])
 
     if args.apply:
         counts = apply_promotion_plan(plan)
         logger.info("Promotion applied with counts: %s", counts)
     else:
-        logger.info("Dry run only. Re-run with --apply to copy approved files into the clean repo.")
+        logger.info("Dry run only. Re-run with --apply to synchronize approved files with the clean repo.")
 
 
 if __name__ == "__main__":

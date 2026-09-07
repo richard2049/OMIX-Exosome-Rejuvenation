@@ -1,5 +1,8 @@
+import json
+import warnings
 import numpy as np
 import pandas as pd
+import pytest
 from pathlib import Path
 import sys
 import zipfile
@@ -8,13 +11,51 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.exosome_effect import estimate_exosome_fraction_with_uncertainty
-from src.attribution import build_mouse_exosome_metadata, compute_exosome_alignment_tables
+from src.clocks import train_transcriptomic_clock
+from src.attribution import (
+    build_mouse_exosome_metadata,
+    compute_exosome_alignment_tables,
+    compute_mouse_exosome_tissue_effects,
+)
 from src.omix007582_audit import build_omix007582_sample_map_audit
+from src.omix009284_audit import build_omix009284_audit
+from src.omix009283_metadata import build_omix009283_metadata_table
 from src.omix_io import load_omix_matrix
+from src.preprocessing import build_proxy_rejuvenation_score
+from src.plasma_axis import build_oriented_plasma_aging_axis, correlate_plasma_axis_with_delta_age
+from src.report_figures import (
+    _claim_limitation,
+    generate_report_figures,
+    plot_portfolio_estimability_guardrail,
+)
 from src.repo_promotion import build_promotion_plan, apply_promotion_plan
-from src.linkage_audit import build_estimability_report
-from src.run_pipeline import _build_default_config, _causal_gate_reason, _ensure_standard_schema, STANDARD_RESULT_COLUMNS
-from src.run_pipeline import _evidence_level
+from src.rejuvenation import annotate_effect_uncertainty
+from src.linkage_audit import audit_primate_plasma_linkage, build_estimability_report
+from src.viz import plot_mediation_effects_bar
+from src.reason_codes import (
+    INSUFFICIENT_LINKED_ANIMALS,
+    OMIX007582_SENTRIX_SAMPLE_SHEET_MISSING,
+    PLASMA_ANIMAL_LINKAGE_COLLISION,
+    PLASMA_BULK_ANIMAL_LINKAGE_MISSING,
+    PLASMA_LINKAGE_CONFIDENCE_MISSING,
+    AUTHOR_KEY_OMIX007582_SENTRIX,
+    AUTHOR_KEY_PLASMA_BULK_LINKAGE,
+    AUTHOR_KEY_PLASMA_TO_ANIMAL,
+)
+from src.run_pipeline import (
+    PROFILE_SPECS,
+    STANDARD_RESULT_COLUMNS,
+    _attach_primary_mediation_interval,
+    _build_animal_level_mediation_table,
+    _build_default_config,
+    _build_mediation_stub,
+    _causal_gate_reason,
+    _compatibility_exosome_fraction_evidence_level,
+    _ensure_standard_schema,
+    _evidence_level,
+    _map_plasma_sample_to_bulk_animal_id,
+    build_plasma_metadata_from_columns,
+)
 
 
 def _workspace_tempdir() -> TemporaryDirectory:
@@ -41,6 +82,271 @@ def test_unlinked_runs_do_not_pass_causal_gate():
     assert "animal_id" in reason.lower() or "overlap" in reason.lower()
 
 
+def test_unresolved_samples_are_not_silently_linked():
+    metadata = build_plasma_metadata_from_columns(["FV_2", "FY_1", "MX_3"])
+    mapped = metadata.set_index("sample_id")
+
+    assert mapped.loc["FV_2", "animal_id"] == "F-V-2"
+    assert mapped.loc["FV_2", "animal_id_confidence"] == "high"
+    for sample_id in ("FY_1", "MX_3"):
+        assert pd.isna(mapped.loc[sample_id, "animal_id"])
+        assert mapped.loc[sample_id, "animal_id_source"] == "unresolved"
+        assert mapped.loc[sample_id, "animal_id_confidence"] == "low"
+
+    animal_id, rule, confidence, reason = _map_plasma_sample_to_bulk_animal_id("not-a-sample")
+    assert animal_id is None
+    assert rule == "none"
+    assert confidence == "low"
+    assert reason
+
+
+def test_linkage_collisions_fail_estimability():
+    prim = pd.DataFrame(
+        {
+            "animal_id": ["A", "B", "C"],
+            "group": ["O_GES", "O_V", "O_WT"],
+            "sex": ["F", "F", "M"],
+        }
+    )
+    plasma = pd.DataFrame(
+        {
+            "animal_id": ["A", "A", "B", "C"],
+            "animal_id_confidence": ["high"] * 4,
+            "group": ["GES", "GES", "V", "WT"],
+            "sex": ["F", "F", "F", "M"],
+        }
+    )
+
+    audit = audit_primate_plasma_linkage(prim, plasma)
+    estimability = build_estimability_report(
+        audit,
+        min_samples_for_mediation=3,
+        min_overlap_animals=3,
+        min_treated_overlap=1,
+        min_control_overlap=2,
+    )
+
+    assert audit["mapping_collision_count"] == 1
+    assert estimability["tier"] == "partially_linked"
+    assert estimability["can_do_mediation"] is False
+    assert estimability["can_do_linked_decomposition"] is False
+    assert estimability["reason_code"] == PLASMA_ANIMAL_LINKAGE_COLLISION
+    assert "collision" in estimability["reason"].lower()
+
+
+def test_partially_linked_data_do_not_run_causal_decomposition():
+    estimability = build_estimability_report(
+        {
+            "has_prim_animal_id_col": True,
+            "has_plasma_animal_id_col": True,
+            "has_plasma_animal_id_confidence_col": True,
+            "n_overlap_animal_ids_high_conf": 3,
+            "n_overlap_treated_animals": 1,
+            "n_overlap_control_animals": 2,
+            "mapping_collision_count": 0,
+        },
+        min_samples_for_mediation=3,
+        min_overlap_animals=4,
+        min_treated_overlap=1,
+        min_control_overlap=2,
+    )
+
+    reason = _causal_gate_reason(
+        enable_mediation=True,
+        enable_causal_decomposition=True,
+        estimability_row=estimability,
+    )
+    assert estimability["tier"] == "partially_linked"
+    assert estimability["can_do_linked_decomposition"] is False
+    assert reason is not None
+
+
+def test_mediation_requires_animal_level_rows():
+    prim = pd.DataFrame(
+        {
+            "animal_id": ["A", "A", "B", "B"],
+            "rejuvenation_score": [1.0, 3.0, 4.0, 8.0],
+            "group_binary": [0, 0, 1, 1],
+            "group": ["O_V", "O_V", "O_GES", "O_GES"],
+        }
+    )
+    plasma = pd.DataFrame(
+        {
+            "animal_id": ["A", "B"],
+            "plasma_state_score": [0.5, 1.5],
+            "animal_id_confidence": ["high", "metadata_exact"],
+        }
+    )
+
+    linked = _build_animal_level_mediation_table(
+        prim,
+        plasma,
+        high_conf_values=("high", "metadata", "metadata_exact"),
+    )
+
+    assert len(linked) == 2
+    assert linked["animal_id"].is_unique
+    assert linked.set_index("animal_id").loc["A", "rejuvenation_score"] == 2.0
+    assert linked.set_index("animal_id").loc["B", "rejuvenation_score"] == 6.0
+
+
+def test_rejuvenation_score_positive_values_are_younger_like():
+    meta = pd.DataFrame(
+        {
+            "sample_id": ["younger_like", "older_like"],
+            "age": [10.0, 10.0],
+            "predicted_age_cv": [8.0, 12.0],
+        }
+    )
+
+    scored = build_proxy_rejuvenation_score(meta)
+
+    assert scored.loc[0, "rejuvenation_score"] == 2.0
+    assert scored.loc[1, "rejuvenation_score"] == -2.0
+
+
+def test_transcriptomic_clock_uses_stable_float64_ridge_inputs():
+    rng = np.random.default_rng(42)
+    sample_ids = [f"S{i:02d}" for i in range(40)]
+    base = rng.normal(size=(100, 40)).astype(np.float32)
+    expression = pd.DataFrame(
+        np.repeat(base, repeats=10, axis=0),
+        index=[f"gene_{i:04d}" for i in range(1000)],
+        columns=sample_ids,
+    )
+    metadata = pd.DataFrame(
+        {
+            "sample_id": sample_ids,
+            "age": np.repeat(np.linspace(4.0, 20.0, 20), 2),
+            "animal_id": np.repeat([f"A{i:02d}" for i in range(20)], 2),
+        }
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _, predictions, metrics = train_transcriptomic_clock(
+            expression,
+            metadata,
+            age_col="age",
+            cv_group_col="animal_id",
+        )
+
+    assert metrics["input_dtype"] == "float64"
+    assert int(metrics["n_features"]) == 1000
+    assert predictions["predicted_age"].notna().all()
+    assert not [item for item in caught if type(item.message).__name__ == "LinAlgWarning"]
+
+
+def test_nonestimable_mediation_writes_structured_stub():
+    stub = _build_mediation_stub(
+        reason="Only 3 overlapping animals for mediation.",
+        tier="partially_linked",
+        n_overlap_animal_ids=3,
+        n_used=3,
+    )
+    with _workspace_tempdir() as tmpdir:
+        path = Path(tmpdir) / "mediation_summary.csv"
+        stub.to_csv(path, index=False)
+        saved = pd.read_csv(path)
+
+    assert set(STANDARD_RESULT_COLUMNS).issubset(saved.columns)
+    assert bool(saved.loc[0, "estimable"]) is False
+    assert int(saved.loc[0, "evidence_level"]) == 0
+    assert saved.loc[0, "tier"] == "partially_linked"
+    assert int(saved.loc[0, "n_overlap_animal_ids"]) == 3
+    assert saved.loc[0, "reason_code"] == INSUFFICIENT_LINKED_ANIMALS
+    assert saved.loc[0, "missing_author_key"] == AUTHOR_KEY_PLASMA_BULK_LINKAGE
+
+
+def test_mediation_diagnostic_accepts_current_and_historical_columns():
+    canonical = pd.DataFrame(
+        {
+            "Total": [-0.6],
+            "Total_CI": [(-1.0, 0.2)],
+            "ADE": [-0.4],
+            "ADE_CI": [(-0.8, -0.1)],
+            "ACME": [-0.2],
+            "ACME_CI": [(-0.6, 0.1)],
+        }
+    )
+    normalized = _attach_primary_mediation_interval(canonical)
+    assert normalized.loc[0, "ci_low"] == -1.0
+    assert normalized.loc[0, "ci_high"] == 0.2
+
+    historical = pd.DataFrame(
+        {
+            "total_effect": [-0.6],
+            "total_ci_low": [-1.0],
+            "total_ci_high": [0.2],
+            "direct_effect": [-0.4],
+            "direct_ci_low": [-0.8],
+            "direct_ci_high": [-0.1],
+            "indirect_effect": [-0.2],
+            "indirect_ci_low": [-0.6],
+            "indirect_ci_high": [0.1],
+        }
+    )
+    historical_normalized = _attach_primary_mediation_interval(historical)
+    assert historical_normalized.loc[0, "ci_low"] == -1.0
+    assert historical_normalized.loc[0, "ci_high"] == 0.2
+
+    with _workspace_tempdir() as tmpdir:
+        canonical_path = Path(tmpdir) / "canonical_mediation.png"
+        historical_path = Path(tmpdir) / "historical_mediation.png"
+        plot_mediation_effects_bar(canonical, canonical_path)
+        plot_mediation_effects_bar(historical, historical_path)
+        assert canonical_path.exists() and canonical_path.stat().st_size > 0
+        assert historical_path.exists() and historical_path.stat().st_size > 0
+
+
+def test_exosome_fraction_not_promoted_when_gate_fails():
+    direct_mediation_level = _evidence_level(
+        estimable=True,
+        tier="fully_linked",
+        has_linked_mediation=True,
+    )
+    compatibility_level = _compatibility_exosome_fraction_evidence_level(
+        estimable=True,
+        has_exosome_alignment=True,
+    )
+
+    assert direct_mediation_level == 4
+    assert compatibility_level == 3
+    assert compatibility_level < direct_mediation_level
+
+
+def test_missing_linkage_confidence_does_not_default_to_high_confidence():
+    prim = pd.DataFrame(
+        {
+            "animal_id": ["A", "B", "C"],
+            "group": ["O_GES", "O_V", "O_WT"],
+        }
+    )
+    plasma_without_confidence = pd.DataFrame(
+        {
+            "animal_id": ["A", "B", "C"],
+            "group": ["GES", "V", "WT"],
+        }
+    )
+
+    audit = audit_primate_plasma_linkage(prim, plasma_without_confidence)
+    estimability = build_estimability_report(
+        audit,
+        min_samples_for_mediation=3,
+        min_overlap_animals=3,
+        min_treated_overlap=1,
+        min_control_overlap=2,
+    )
+
+    assert audit["has_plasma_animal_id_confidence_col"] is False
+    assert audit["n_plasma_high_conf_animal_id_non_null"] == 0
+    assert audit["n_overlap_animal_ids_high_conf"] == 0
+    assert estimability["tier"] == "unlinked"
+    assert estimability["can_do_mediation"] is False
+    assert estimability["reason_code"] == PLASMA_LINKAGE_CONFIDENCE_MISSING
+    assert estimability["missing_author_key"] == AUTHOR_KEY_PLASMA_TO_ANIMAL
+
+
 def test_exosome_fraction_unestimable_has_explicit_reason():
     cells = pd.DataFrame({"mean_effect": [0.2, -0.1]}, index=["liver", "heart"])
     exo = pd.DataFrame(columns=["mean_effect"])
@@ -55,6 +361,8 @@ def test_exosome_fraction_unestimable_has_explicit_reason():
     assert out["estimable"] is False
     assert isinstance(out["reason"], str)
     assert len(out["reason"]) > 0
+    assert out["reason_code"]
+    assert out["missing_author_key"]
 
 
 def test_standard_schema_columns_always_present():
@@ -73,6 +381,55 @@ def test_standard_schema_columns_always_present():
     for col in STANDARD_RESULT_COLUMNS:
         assert col in out.columns
     assert out.loc[0, "reason"] == "stub"
+    assert out.loc[0, "reason_code"]
+    assert out.loc[0, "missing_author_key"]
+
+
+def test_tissue_effect_uncertainty_annotation_keeps_nominal_claims_separate():
+    df = pd.DataFrame(
+        [
+            {"tissue": "A", "effect_median": -1.0, "ci_low": -2.0, "ci_high": 0.5},
+            {"tissue": "B", "effect_median": 1.2, "ci_low": 0.4, "ci_high": 2.0},
+        ]
+    )
+    out = annotate_effect_uncertainty(df)
+
+    assert bool(out.loc[0, "ci_crosses_zero"]) is True
+    assert out.loc[0, "effect_direction"] == "younger_shift"
+    assert out.loc[0, "interpretation_label"] == "nominal_younger_shift_ci_crosses_zero"
+    assert bool(out.loc[1, "ci_crosses_zero"]) is False
+    assert out.loc[1, "interpretation_label"] == "supported_older_shift_ci_excludes_zero"
+    assert out["signal_to_uncertainty"].notna().all()
+
+
+def test_non_estimable_outputs_receive_author_metadata_reason_codes():
+    out = _ensure_standard_schema(
+        pd.DataFrame(
+            [
+                {
+                    "estimable": False,
+                    "reason": "No plasma samples could be linked to bulk animal IDs.",
+                    "method": "plasma_linkage_qc",
+                }
+            ]
+        )
+    )
+    assert out.loc[0, "reason_code"] == PLASMA_BULK_ANIMAL_LINKAGE_MISSING
+    assert out.loc[0, "missing_author_key"] == AUTHOR_KEY_PLASMA_BULK_LINKAGE
+
+    estimability = build_estimability_report(
+        {
+            "has_prim_animal_id_col": True,
+            "has_plasma_animal_id_col": True,
+            "has_plasma_animal_id_confidence_col": True,
+            "n_overlap_animal_ids_high_conf": 1,
+            "n_overlap_treated_animals": 1,
+            "n_overlap_control_animals": 0,
+        },
+        min_overlap_animals=20,
+    )
+    assert estimability["reason_code"] == INSUFFICIENT_LINKED_ANIMALS
+    assert estimability["missing_author_key"] == AUTHOR_KEY_PLASMA_BULK_LINKAGE
 
 
 def test_mouse_exosome_parser_recovers_expected_fields():
@@ -89,6 +446,59 @@ def test_mouse_exosome_parser_recovers_expected_fields():
     assert bool(second["parse_ok"]) is True
     assert str(second["sex"]) == "F"
     assert str(second["arm"]) == "Ctrl"
+
+
+def test_mouse_exosome_tissue_clock_uses_current_clock_interface():
+    rng = np.random.default_rng(7)
+    reference_ids = [f"ref_{i:02d}" for i in range(20)]
+    ges_ids = [f"ges_{i}" for i in range(3)]
+    vehicle_ids = [f"veh_{i}" for i in range(3)]
+    sample_ids = reference_ids + ges_ids + vehicle_ids
+    reference_ages = np.tile([4.0, 8.0, 12.0, 16.0], 5)
+    ages = np.concatenate([reference_ages, np.repeat(20.0, 6)])
+    signal = np.tile(ages, (30, 1)) * np.linspace(0.02, 0.08, 30)[:, None]
+    expression = pd.DataFrame(
+        signal + rng.normal(scale=0.2, size=signal.shape),
+        index=[f"gene_{i}" for i in range(30)],
+        columns=sample_ids,
+    )
+    metadata = pd.DataFrame(
+        {
+            "sample_id": sample_ids,
+            "tissue": "brain",
+            "arm": ["Baseline"] * 20 + ["GES"] * 3 + ["Veh"] * 3,
+            "age": ages,
+        }
+    )
+
+    effects = compute_mouse_exosome_tissue_effects(
+        expression,
+        metadata,
+        contrasts=(("GES", "Veh"),),
+        n_bootstrap=20,
+        n_permutations=20,
+    )
+
+    assert len(effects) == 1
+    assert bool(effects.loc[0, "estimable"]) is True
+    assert effects.loc[0, "reason_code"] == "OK"
+    assert int(effects.loc[0, "n_used"]) == 6
+
+
+def test_omix009283_metadata_builder_reads_header_sample_ids():
+    with _workspace_tempdir() as tmpdir:
+        tmp_path = Path(tmpdir)
+        matrix_path = tmp_path / "OMIX009283-01.txt"
+        matrix_path.write_text(
+            "gene\t21_M_brain_GES_1\t8_W_liver_Ctrl_10\n"
+            "GeneA\t1\t2\n",
+            encoding="utf-8",
+        )
+
+        metadata = build_omix009283_metadata_table(matrix_path)
+        assert metadata["sample_id"].tolist() == ["21_M_brain_GES_1", "8_W_liver_Ctrl_10"]
+        assert metadata["parse_ok"].fillna(False).all()
+        assert metadata.loc[metadata["sample_id"] == "21_M_brain_GES_1", "arm"].iloc[0] == "GES"
 
 
 def test_exosome_alignment_unestimable_has_explicit_reason():
@@ -136,6 +546,43 @@ def test_exosome_alignment_unestimable_has_explicit_reason():
     assert len(summary.loc[0, "reason"]) > 0
     assert "common tissues" in summary.loc[0, "reason"]
     assert "reason" in by_tissue.columns
+
+
+def test_cross_species_alignment_preserves_evidence_tier():
+    prim = pd.DataFrame(
+        {"mean_effect": [-0.4, -0.2, 0.3]},
+        index=["Heart", "Liver", "Hippocampus"],
+    )
+    prim.index.name = "tissue"
+    mouse = pd.DataFrame(
+        {
+            "tissue": ["heart", "liver", "brain"],
+            "contrast": ["GES_vs_Veh"] * 3,
+            "mean_effect": [-0.3, -0.1, 0.2],
+            "estimable": [True] * 3,
+            "available": [True] * 3,
+            "ci_low": [-0.5, -0.3, 0.0],
+            "ci_high": [-0.1, 0.1, 0.4],
+            "permutation_p_value": [0.04, 0.2, 0.1],
+        }
+    )
+
+    by_tissue, summary = compute_exosome_alignment_tables(
+        prim,
+        mouse,
+        tissue_map={"heart": "Heart", "liver": "Liver", "brain": "Hippocampus"},
+        contrasts=["GES_vs_Veh"],
+        min_common_tissues=3,
+        n_bootstrap=20,
+        n_permutations=20,
+        random_state=1,
+    )
+
+    assert summary["estimable"].astype(bool).all()
+    assert by_tissue["estimable"].astype(bool).all()
+    assert set(summary["evidence_level"].astype(int)) == {3}
+    assert set(by_tissue["evidence_level"].astype(int)) == {3}
+    assert not (summary["evidence_level"].astype(int) == 4).any()
 
 
 def test_evidence_level_ladder_supports_alignment_and_mediation():
@@ -200,6 +647,8 @@ def test_omix007582_audit_refuses_underdetermined_biological_mapping():
         assert bool(summary.loc[0, "beta_equals_idat_directory"]) is True
         assert bool(summary.loc[0, "beta_equals_idat_archive"]) is True
         assert "cannot be recovered" in str(summary.loc[0, "reason"])
+        assert summary.loc[0, "reason_code"] == OMIX007582_SENTRIX_SAMPLE_SHEET_MISSING
+        assert summary.loc[0, "missing_author_key"] == AUTHOR_KEY_OMIX007582_SENTRIX
         assert int(overlap_audit["n_exact_overlaps"].sum()) == 0
         assert technical_inventory["mapped_sample_id"].isna().all()
         assert metadata_inventory["mapped_technical_id"].isna().all()
@@ -233,6 +682,217 @@ def test_build_default_config_supports_demo_profile():
         assert cfg.enable_subset_validation_block is False
 
 
+def test_demo_assets_manifest_covers_demo_profile_inputs():
+    repo_root = Path(__file__).resolve().parents[1]
+    assets_manifest = json.loads((repo_root / "promotion_assets_manifest.json").read_text(encoding="utf-8"))
+    asset_files = set(assets_manifest["asset_files"])
+    demo_spec = PROFILE_SPECS["demo"]
+    expected_assets = {
+        f"data/PROCESSED/{value}"
+        for key, value in demo_spec.items()
+        if key.endswith(("_matrix", "_metadata")) and value
+    }
+
+    assert expected_assets.issubset(asset_files)
+    for rel_path in expected_assets:
+        assert (repo_root / rel_path).exists(), rel_path
+
+
+def test_demo_methylation_asset_is_parseable_csv():
+    repo_root = Path(__file__).resolve().parents[1]
+    matrix_path = repo_root / "data" / "PROCESSED" / "OMIX007582_beta_matrix_example.csv"
+    matrix = pd.read_csv(matrix_path, index_col=0)
+
+    assert matrix.shape[0] > 0
+    assert matrix.shape[1] > 0
+    assert str(matrix.index[0]).startswith("cg")
+
+
+def test_omix007582_support_script_is_parameterized():
+    repo_root = Path(__file__).resolve().parents[1]
+    script_text = (repo_root / "src" / "scripts" / "process_OMIX007582_Mammal40.R").read_text(encoding="utf-8")
+
+    assert "--idat-dir" in script_text
+    assert "--output-dir" in script_text
+    assert "--max-prefixes" in script_text
+    assert "--prefixes" in script_text
+    assert "--enable-partial-mapping" in script_text
+    assert "D:/DATA" not in script_text
+    assert "data/RAW/data/OMIX007582_beta_matrix.csv" not in script_text
+
+
+def test_optional_r_environment_spec_bootstraps_biocmanager():
+    repo_root = Path(__file__).resolve().parents[1]
+    env_text = (repo_root / "environment-omix007582-r.yml").read_text(encoding="utf-8")
+    main_env_text = (repo_root / "environment.yml").read_text(encoding="utf-8")
+
+    assert "name: srsc-omix007582-r" in env_text
+    assert "conda-forge" in env_text
+    assert "bioconda" in env_text
+    assert "r-base" in env_text
+    assert "r-biocmanager" in env_text
+    assert "r-base" in main_env_text
+    assert "r-biocmanager" in main_env_text
+
+
+def test_public_data_ceiling_document_names_required_author_keys():
+    repo_root = Path(__file__).resolve().parents[1]
+    doc_text = (
+        repo_root / "Documents" / "public_data_ceiling_and_author_request.md"
+    ).read_text(encoding="utf-8")
+
+    required_terms = [
+        "plasma proteomics",
+        "animal_id",
+        "OMIX007582",
+        "Sentrix",
+        "exosome cargo",
+        "Level 4",
+        "non-estimable",
+        "reason_code",
+        "missing_author_key",
+    ]
+    for term in required_terms:
+        assert term in doc_text
+
+
+def test_oriented_plasma_axis_reports_young_like_ges_shift():
+    samples = ["Y1", "Y2", "V1", "V2", "WT1", "WT2", "GES1", "GES2"]
+    expr = pd.DataFrame(
+        [
+            [0.0, 0.2, 3.0, 3.2, 2.9, 3.1, 1.1, 1.0],
+            [0.1, 0.0, 2.8, 3.1, 3.2, 3.0, 1.2, 1.1],
+            [0.0, 0.1, 2.7, 3.0, 2.8, 3.1, 0.9, 1.0],
+        ],
+        index=["POSTN", "CRP", "IGF1"],
+        columns=samples,
+    )
+    meta = pd.DataFrame(
+        {
+            "sample_id": samples,
+            "group": ["Y", "Y", "V", "V", "WT", "WT", "GES", "GES"],
+        }
+    )
+
+    scores, loadings, summary = build_oriented_plasma_aging_axis(
+        expr,
+        meta,
+        young_groups=("Y",),
+        old_control_groups=("V", "WT"),
+        treated_groups=("GES",),
+        n_top_proteins=3,
+        n_bootstrap=50,
+        n_permutations=50,
+        random_state=1,
+    )
+
+    row = summary.iloc[0]
+    assert bool(row["estimable"])
+    assert row["axis_orientation"] == "higher_older_like"
+    assert row["old_control_median"] > row["young_control_median"]
+    assert row["treated_median"] < row["old_control_median"]
+    assert row["treated_shift_label"] == "young_like_shift_vs_old_controls"
+    assert {"sample_id", "plasma_age_axis_score"}.issubset(scores.columns)
+    assert {"protein", "loading", "abs_loading"}.issubset(loadings.columns)
+
+
+def test_plasma_axis_delta_age_correlation_uses_high_confidence_links_only():
+    prim_meta = pd.DataFrame(
+        {
+            "animal_id": ["A", "B", "C", "D", "E"],
+            "delta_age": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "group": ["O_V", "O_V", "O_WT", "O_GES", "O_GES"],
+        }
+    )
+    plasma_meta = pd.DataFrame(
+        {
+            "animal_id": ["A", "B", "C", "D", "E"],
+            "plasma_age_axis_score": [1.0, 2.0, 3.0, 4.0, 100.0],
+            "animal_id_confidence": ["high", "high", "metadata", "metadata_exact", "low"],
+            "group": ["V", "V", "WT", "GES", "GES"],
+        }
+    )
+
+    out = correlate_plasma_axis_with_delta_age(
+        prim_meta,
+        plasma_meta,
+        min_animals=3,
+        n_bootstrap=50,
+        n_permutations=50,
+        random_state=1,
+    )
+
+    row = out.iloc[0]
+    assert bool(row["estimable"])
+    assert int(row["n_animals"]) == 4
+    assert row["spearman_rho"] > 0.99
+    assert "hypothesis-generating" in row["reason"]
+
+
+def test_scientific_objectives_document_separates_replication_from_claims():
+    repo_root = Path(__file__).resolve().parents[1]
+    doc_text = (
+        repo_root / "Documents" / "scientific_objectives_and_decision_framework.md"
+    ).read_text(encoding="utf-8")
+
+    required_terms = [
+        "not only a reproduction",
+        "exosome-aligned contribution",
+        "Therapeutic insight",
+        "Hypothesis-generating result",
+        "Public-Data Ceiling",
+        "request author metadata",
+    ]
+    for term in required_terms:
+        assert term in doc_text
+
+
+def test_omix009284_audit_detects_pbmc_sc_export_and_suffix_mapping():
+    with _workspace_tempdir() as tmpdir:
+        tmp_path = Path(tmpdir)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        (data_dir / "OMIX009284-01.txt").write_text(
+            "AAAC-1_1\tAAAG-1_1\nGeneA\t1\t0\n",
+            encoding="utf-8",
+        )
+        (data_dir / "OMIX009284-02.txt").write_text(
+            "TTTC-1_2\tTTTG-1_2\tTTTA-1_2\nGeneA\t0\t1\t2\n",
+            encoding="utf-8",
+        )
+
+        metadata = pd.DataFrame(
+            {
+                "orig.ident": ["SeuratProject"] * 5,
+                "nCount_RNA": [10, 11, 12, 13, 14],
+                "nFeature_RNA": [5, 5, 6, 6, 7],
+                "percent.mt": [1.0, 1.2, 1.3, 1.1, 1.4],
+                "tissue": ["PBMC"] * 5,
+                "group": ["GES", "GES", "Vehical", "Vehical", "Vehical"],
+                "sample": ["G1", "G1", "V1", "V1", "V1"],
+                "cell": ["AAAC-1_1", "AAAG-1_1", "TTTC-1_2", "TTTG-1_2", "TTTA-1_2"],
+                "nCount_SCT": [9, 10, 11, 12, 13],
+                "nFeature_SCT": [4, 4, 5, 5, 6],
+            },
+            index=["AAAC-1_1", "AAAG-1_1", "TTTC-1_2", "TTTG-1_2", "TTTA-1_2"],
+        )
+        metadata.to_csv(data_dir / "OMIX009284-27.txt", sep="\t")
+
+        summary, file_inventory, sample_mapping = build_omix009284_audit(data_dir=data_dir)
+
+        assert bool(summary.loc[0, "available"]) is True
+        assert bool(summary.loc[0, "estimable"]) is False
+        assert str(summary.loc[0, "dataset_scope"]) == "PBMC single-cell RNA export"
+        assert int(summary.loc[0, "n_expression_matrices"]) == 2
+        assert int(summary.loc[0, "n_metadata_tables"]) == 1
+        assert bool(summary.loc[0, "matrix_suffixes_match_metadata"]) is True
+        assert str(summary.loc[0, "tissue_labels"]) == "PBMC"
+        assert set(file_inventory["role"]) == {"gene_by_cell_matrix", "cell_metadata_table"}
+        assert sample_mapping["mapping_confidence"].eq("high").all()
+        assert sample_mapping["sample"].tolist() == ["G1", "V1"]
+
+
 def test_load_omix_matrix_accepts_string_feature_ids():
     with _workspace_tempdir() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -254,28 +914,539 @@ def test_repo_promotion_plan_and_apply():
         source_root = tmp_path / "source"
         target_root = tmp_path / "target"
         (source_root / "src").mkdir(parents=True)
+        (source_root / "data" / "PROCESSED").mkdir(parents=True)
         (target_root / "src").mkdir(parents=True)
+        (target_root / "data" / "PROCESSED").mkdir(parents=True)
 
         (source_root / "README.md").write_text("new readme\n", encoding="utf-8")
         (target_root / "README.md").write_text("old readme\n", encoding="utf-8")
+        (target_root / "src" / "obsolete.py").write_text("print('obsolete')\n", encoding="utf-8")
         (source_root / "src" / "module.py").write_text("print('hello')\n", encoding="utf-8")
+        (source_root / "data" / "PROCESSED" / "demo.csv").write_text("sample,value\ns1,1\n", encoding="utf-8")
 
         manifest = {
             "sync_files": ["README.md", "src/module.py"],
-            "optional_demo_files": [],
+            "remove_files": ["src/obsolete.py"],
+        }
+        assets_manifest = {
+            "asset_files": ["data/PROCESSED/demo.csv"],
         }
         plan = build_promotion_plan(
             source_root=source_root,
             target_root=target_root,
             manifest=manifest,
-            include_demo_data=False,
+            assets_manifest=assets_manifest,
+            include_assets=False,
         )
         actions = {item.rel_path: item.action for item in plan}
         assert actions["README.md"] == "update"
         assert actions["src/module.py"] == "create"
+        assert actions["src/obsolete.py"] == "remove"
+        assert "data/PROCESSED/demo.csv" not in actions
 
         counts = apply_promotion_plan(plan)
         assert counts["update"] == 1
         assert counts["create"] == 1
+        assert counts["remove"] == 1
         assert (target_root / "README.md").read_text(encoding="utf-8") == "new readme\n"
         assert (target_root / "src" / "module.py").read_text(encoding="utf-8") == "print('hello')\n"
+        assert not (target_root / "src" / "obsolete.py").exists()
+
+        asset_plan = build_promotion_plan(
+            source_root=source_root,
+            target_root=target_root,
+            manifest=manifest,
+            assets_manifest=assets_manifest,
+            include_assets=True,
+        )
+        asset_rows = {item.rel_path: item for item in asset_plan}
+        assert asset_rows["data/PROCESSED/demo.csv"].action == "create"
+        assert asset_rows["data/PROCESSED/demo.csv"].category == "demo_asset"
+
+        asset_counts = apply_promotion_plan(asset_plan)
+        assert asset_counts["create"] == 1
+        assert (target_root / "data" / "PROCESSED" / "demo.csv").read_text(encoding="utf-8") == "sample,value\ns1,1\n"
+
+        blocked_dir = target_root / "src" / "retained_directory"
+        blocked_dir.mkdir()
+        blocked_plan = build_promotion_plan(
+            source_root=source_root,
+            target_root=target_root,
+            manifest={"remove_files": ["src/retained_directory"]},
+        )
+        assert blocked_plan[0].action == "blocked_remove"
+        blocked_counts = apply_promotion_plan(blocked_plan)
+        assert blocked_counts["blocked_remove"] == 1
+        assert blocked_dir.is_dir()
+
+        with pytest.raises(ValueError, match="relative and confined"):
+            build_promotion_plan(
+                source_root=source_root,
+                target_root=target_root,
+                manifest={"remove_files": ["../outside.txt"]},
+            )
+
+
+def test_report_figure_layer_generates_manifest_and_pngs():
+    with _workspace_tempdir() as tmpdir:
+        tmp_path = Path(tmpdir)
+        results_dir = tmp_path / "results"
+        out_dir = tmp_path / "figures" / "report"
+        assets_dir = tmp_path / "docs" / "assets"
+        results_dir.mkdir()
+
+        pd.DataFrame(
+            [
+                {
+                    "n_samples": 40,
+                    "MAE": 2.1,
+                    "RMSE": 2.8,
+                    "pearson_r": 0.82,
+                    "spearman_r": 0.85,
+                    "calibration_slope": 0.71,
+                    "cv_strategy": "GroupKFold(animal_id)",
+                    "cv_n_splits": 5,
+                    "cv_n_groups": 10,
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 40,
+                    "method": "transcriptomic_clock_cv",
+                    "evidence_level": 1,
+                }
+            ]
+        ).to_csv(results_dir / "clock_metrics_primates.csv", index=False)
+
+        pd.DataFrame(
+            [
+                {
+                    "tissue": "Heart",
+                    "effect_median": -2.0,
+                    "ci_low": -3.0,
+                    "ci_high": -1.0,
+                    "available": True,
+                    "estimable": True,
+                    "reason": "",
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 12,
+                    "method": "delta_age_group_bootstrap",
+                    "evidence_level": 1,
+                }
+            ]
+        ).to_csv(results_dir / "rejuvenation_by_tissue.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "contrast": "GES_vs_Veh",
+                    "n_common_tissues": 4,
+                    "mean_standardized_effect_similarity": 0.6,
+                    "ci_low": 0.3,
+                    "ci_high": 0.8,
+                    "spearman_rho": 0.4,
+                    "fraction_signed_concordant": 0.75,
+                    "available": True,
+                    "estimable": True,
+                    "reason": "",
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 4,
+                    "method": "cross_species_effect_alignment_summary",
+                    "evidence_level": 3,
+                }
+            ]
+        ).to_csv(results_dir / "exosome_alignment_summary.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "contrast": "GES_vs_Veh",
+                    "mouse_tissue": "heart",
+                    "primate_tissue": "Heart",
+                    "macaque_effect": -2.0,
+                    "mouse_effect": -1.5,
+                    "signed_concordance": 1,
+                    "rank_concordance": 1,
+                    "standardized_effect_similarity": 0.8,
+                    "residual_component": 0.2,
+                    "available": True,
+                    "estimable": True,
+                    "reason": "",
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 4,
+                    "method": "cross_species_effect_alignment",
+                    "ci_low": -0.2,
+                    "ci_high": 0.3,
+                    "evidence_level": 3,
+                },
+                {
+                    "contrast": "GES_vs_Veh",
+                    "mouse_tissue": "liver",
+                    "primate_tissue": "Liver",
+                    "macaque_effect": -1.0,
+                    "mouse_effect": 0.6,
+                    "signed_concordance": 0,
+                    "rank_concordance": 0,
+                    "standardized_effect_similarity": 0.3,
+                    "residual_component": 1.4,
+                    "available": True,
+                    "estimable": True,
+                    "reason": "",
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 4,
+                    "method": "cross_species_effect_alignment",
+                    "ci_low": -0.5,
+                    "ci_high": 0.8,
+                    "evidence_level": 3,
+                },
+            ]
+        ).to_csv(results_dir / "exosome_alignment_by_tissue.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "tier": "fully_linked",
+                    "can_do_mediation": True,
+                    "n_overlap_animal_ids": 24,
+                    "n_overlap_treated_animals": 8,
+                    "n_overlap_control_animals": 16,
+                    "min_overlap_animals": 20,
+                    "min_treated_overlap": 6,
+                    "min_control_overlap": 12,
+                    "min_samples_for_mediation": 12,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "available": True,
+                    "estimable": True,
+                    "reason": "",
+                    "n_used": 24,
+                    "method": "estimability_gate",
+                    "evidence_level": 0,
+                }
+            ]
+        ).to_csv(results_dir / "estimability_report.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "n_plasma_total": 30,
+                    "n_mapped_non_null": 24,
+                    "n_mapped_high_conf": 24,
+                    "n_mapped_valid_in_bulk": 24,
+                    "n_unresolved": 6,
+                    "mapping_collision_count": 0,
+                    "mapping_coverage": 0.8,
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 30,
+                    "method": "plasma_linkage_qc",
+                    "evidence_level": 2,
+                }
+            ]
+        ).to_csv(results_dir / "linkage_qc_report.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "ACME": -0.2,
+                    "ACME_CI": "(-0.6, 0.1)",
+                    "ADE": -0.4,
+                    "ADE_CI": "(-0.8, -0.1)",
+                    "Total": -0.6,
+                    "Total_CI": "(-1.0, 0.2)",
+                    "PropMediated": 0.33,
+                    "PropMediated_CI": "(-0.2, 0.9)",
+                    "tier": "fully_linked",
+                    "n_overlap_animal_ids": 24,
+                    "available": True,
+                    "estimable": True,
+                    "reason": "",
+                    "n_used": 24,
+                    "method": "linear_mediation_bootstrap",
+                    "evidence_level": 4,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                }
+            ]
+        ).to_csv(results_dir / "mediation_summary.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "protein": "POSTN",
+                    "spearman_r": -0.7,
+                    "rho_ci_low": -0.9,
+                    "rho_ci_high": -0.4,
+                    "stable_association": True,
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 10,
+                    "method": "spearman_biomarker_ranking",
+                    "evidence_level": 2,
+                }
+            ]
+        ).to_csv(results_dir / "plasma_biomarkers.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "sample_id": "Y1",
+                    "group": "Y",
+                    "plasma_age_axis_score": -1.5,
+                    "raw_pc1_score": -1.5,
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 4,
+                    "method": "oriented_plasma_pc1_age_axis",
+                    "evidence_level": 2,
+                },
+                {
+                    "sample_id": "V1",
+                    "group": "V",
+                    "plasma_age_axis_score": 1.0,
+                    "raw_pc1_score": 1.0,
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 4,
+                    "method": "oriented_plasma_pc1_age_axis",
+                    "evidence_level": 2,
+                },
+                {
+                    "sample_id": "WT1",
+                    "group": "WT",
+                    "plasma_age_axis_score": 1.2,
+                    "raw_pc1_score": 1.2,
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 4,
+                    "method": "oriented_plasma_pc1_age_axis",
+                    "evidence_level": 2,
+                },
+                {
+                    "sample_id": "GES1",
+                    "group": "GES",
+                    "plasma_age_axis_score": -0.2,
+                    "raw_pc1_score": -0.2,
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 4,
+                    "method": "oriented_plasma_pc1_age_axis",
+                    "evidence_level": 2,
+                },
+            ]
+        ).to_csv(results_dir / "plasma_age_axis_scores.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "loading_rank": 1,
+                    "protein": "POSTN",
+                    "loading": 0.7,
+                    "abs_loading": 0.7,
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 3,
+                    "method": "oriented_plasma_pc1_age_axis",
+                    "evidence_level": 2,
+                },
+                {
+                    "loading_rank": 2,
+                    "protein": "IGF1",
+                    "loading": -0.5,
+                    "abs_loading": 0.5,
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 3,
+                    "method": "oriented_plasma_pc1_age_axis",
+                    "evidence_level": 2,
+                },
+                {
+                    "loading_rank": 3,
+                    "protein": "CRP",
+                    "loading": 0.4,
+                    "abs_loading": 0.4,
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 3,
+                    "method": "oriented_plasma_pc1_age_axis",
+                    "evidence_level": 2,
+                },
+            ]
+        ).to_csv(results_dir / "plasma_age_axis_loadings.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "pc1_explained_variance_ratio": 0.62,
+                    "treated_shift_label": "young_like_shift_vs_old_controls",
+                    "treated_fraction_of_old_young_gap": 0.4,
+                    "treated_vs_old_permutation_p_value": 0.08,
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 4,
+                    "method": "oriented_plasma_pc1_age_axis",
+                    "evidence_level": 2,
+                }
+            ]
+        ).to_csv(results_dir / "plasma_age_axis_summary.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "n_animals": 4,
+                    "spearman_rho": 0.5,
+                    "ci_low": -0.2,
+                    "ci_high": 0.9,
+                    "permutation_p_value": 0.2,
+                    "available": True,
+                    "estimable": True,
+                    "reason": "Linked animal count is modest.",
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 4,
+                    "method": "linked_plasma_age_axis_delta_age_spearman",
+                    "evidence_level": 2,
+                }
+            ]
+        ).to_csv(results_dir / "plasma_age_axis_delta_age_correlation.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "analysis_type": "control_set",
+                    "scenario": "primary",
+                    "effect": -1.0,
+                    "direction": "negative",
+                    "available": True,
+                    "estimable": True,
+                    "reason_code": "OK",
+                    "missing_author_key": "",
+                    "n_used": 10,
+                    "method": "global_delta_age_bootstrap",
+                    "evidence_level": 1,
+                }
+            ]
+        ).to_csv(results_dir / "sensitivity_summary.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "available": False,
+                    "estimable": False,
+                    "reason": "Mammal40 biological sample map unavailable.",
+                    "reason_code": "OMIX007582_SENTRIX_SAMPLE_SHEET_MISSING",
+                    "missing_author_key": "omix007582_sentrix_barcode_position_to_biological_sample_tissue_group_sex_age",
+                    "n_used": 0,
+                    "method": "multimodal_concordance",
+                    "evidence_level": 0,
+                }
+            ]
+        ).to_csv(results_dir / "multimodal_concordance_summary.csv", index=False)
+
+        manifest = generate_report_figures(
+            results_dir=results_dir,
+            out_dir=out_dir,
+            top_n_plasma=5,
+            portfolio_assets_dir=assets_dir,
+        )
+
+        assert len(manifest) == 15
+        assert (out_dir / "report_figure_manifest.csv").exists()
+        mediation_limitation = _claim_limitation(
+            "Linked mediation",
+            pd.read_csv(results_dir / "mediation_summary.csv"),
+            estimable=True,
+            reason_code="OK",
+        )
+        assert "OK" not in mediation_limitation
+        assert "unstable" in mediation_limitation
+        expected_figures = {
+            "report_mediation_uncertainty.png",
+            "report_exosome_alignment_by_tissue.png",
+            "report_top_tissue_priority.png",
+            "report_evidence_ladder.png",
+            "report_plasma_biomarker_categories.png",
+            "report_oriented_plasma_age_axis.png",
+            "report_portfolio_aging_rejuvenation.png",
+            "report_portfolio_multimodal_evidence.png",
+            "report_portfolio_estimability_guardrail.png",
+        }
+        assert expected_figures.issubset(set(manifest["figure"]))
+        for figure in manifest["figure"]:
+            assert (out_dir / figure).exists(), figure
+        assert {path.name for path in assets_dir.glob("*.png")} == {
+            "aging_rejuvenation_signal.png",
+            "multimodal_evidence_architecture.png",
+            "estimability_guardrail.png",
+        }
+        portfolio_rows = manifest.set_index("figure")
+        assert "methylation=blocked" in portfolio_rows.loc[
+            "report_portfolio_multimodal_evidence.png", "message"
+        ]
+        assert "gate=pass" in portfolio_rows.loc[
+            "report_portfolio_estimability_guardrail.png", "message"
+        ]
+
+        readme_text = (Path(__file__).resolve().parents[1] / "README.md").read_text(
+            encoding="utf-8"
+        )
+        assert readme_text.count("](docs/assets/") == 3
+
+
+def test_portfolio_estimability_figure_preserves_fail_branch():
+    with _workspace_tempdir() as tmpdir:
+        tmp_path = Path(tmpdir)
+        results_dir = tmp_path / "results"
+        out_dir = tmp_path / "figures"
+        results_dir.mkdir()
+        pd.DataFrame(
+            [
+                {
+                    "tier": "unlinked",
+                    "can_do_mediation": False,
+                    "n_overlap_animal_ids": 0,
+                    "n_overlap_treated_animals": 0,
+                    "n_overlap_control_animals": 0,
+                    "mapping_collision_count": 0,
+                    "min_overlap_animals": 20,
+                    "min_treated_overlap": 6,
+                    "min_control_overlap": 12,
+                    "reason_code": "PLASMA_LINKAGE_CONFIDENCE_MISSING",
+                    "missing_author_key": "omix007581_plasma_sample_id_to_animal_id_group_sex_age",
+                    "estimable": False,
+                }
+            ]
+        ).to_csv(results_dir / "estimability_report.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "n_plasma_total": 12,
+                    "n_mapped_high_conf": 0,
+                    "mapping_collision_count": 0,
+                }
+            ]
+        ).to_csv(results_dir / "linkage_qc_report.csv", index=False)
+        _build_mediation_stub(
+            reason="Plasma animal_id confidence column is missing.",
+            tier="unlinked",
+            n_overlap_animal_ids=0,
+        ).to_csv(results_dir / "mediation_summary.csv", index=False)
+
+        record = plot_portfolio_estimability_guardrail(results_dir, out_dir)
+
+        assert record.status == "ok"
+        assert "gate=fail" in record.message
+        assert "mediation=blocked" in record.message
+        assert record.path.exists()

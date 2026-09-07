@@ -24,6 +24,12 @@ import numpy as np
 import pandas as pd
 
 from .logging_utils import get_logger
+from .reason_codes import (
+    OK,
+    OMIX007582_SENTRIX_SAMPLE_SHEET_MISSING,
+    AUTHOR_KEY_OMIX007582_SENTRIX,
+    annotate_reason_fields,
+)
 
 logger = get_logger(__name__)
 
@@ -141,6 +147,8 @@ def build_omix007582_sample_map_audit(
             "promoting any biological sample map."
         )
         evidence_level = 1
+        reason_code = OK
+        missing_author_key = ""
     else:
         mapping_status = "technical_ids_only"
         estimable = False
@@ -151,8 +159,10 @@ def build_omix007582_sample_map_audit(
             "recovered from the current public files without external key metadata."
         )
         evidence_level = 0
+        reason_code = OMIX007582_SENTRIX_SAMPLE_SHEET_MISSING
+        missing_author_key = AUTHOR_KEY_OMIX007582_SENTRIX
 
-    summary = pd.DataFrame(
+    summary = annotate_reason_fields(pd.DataFrame(
         [
             {
                 "mapping_status": mapping_status,
@@ -175,6 +185,8 @@ def build_omix007582_sample_map_audit(
                 "available": True,
                 "estimable": estimable,
                 "reason": reason,
+                "reason_code": reason_code,
+                "missing_author_key": missing_author_key,
                 "n_used": int(len(exact_overlap_union)),
                 "method": "omix007582_sample_map_audit",
                 "ci_low": np.nan,
@@ -182,7 +194,7 @@ def build_omix007582_sample_map_audit(
                 "evidence_level": evidence_level,
             }
         ]
-    )
+    ))
 
     technical_inventory = pd.DataFrame({"technical_id": technical_ids})
     technical_inventory["sentrix_barcode"] = technical_inventory["technical_id"].str.extract(
@@ -198,6 +210,8 @@ def build_omix007582_sample_map_audit(
     technical_inventory["mapping_confidence"] = "none"
     technical_inventory["mapping_status"] = mapping_status
     technical_inventory["reason"] = reason
+    technical_inventory["reason_code"] = reason_code
+    technical_inventory["missing_author_key"] = missing_author_key
 
     metadata_inventory = metadata.copy()
     if "OriginalSampleName" not in metadata_inventory.columns:
@@ -210,6 +224,8 @@ def build_omix007582_sample_map_audit(
     metadata_inventory["mapping_confidence"] = "none"
     metadata_inventory["mapping_status"] = mapping_status
     metadata_inventory["reason"] = reason
+    metadata_inventory["reason_code"] = reason_code
+    metadata_inventory["missing_author_key"] = missing_author_key
 
     overlap_audit = pd.DataFrame(overlap_rows)
     if overlap_audit.empty:
