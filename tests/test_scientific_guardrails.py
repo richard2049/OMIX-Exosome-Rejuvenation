@@ -1,4 +1,3 @@
-import json
 import warnings
 import numpy as np
 import pandas as pd
@@ -26,13 +25,15 @@ from src.plasma_axis import build_oriented_plasma_aging_axis, correlate_plasma_a
 from src.report_figures import (
     _claim_limitation,
     generate_report_figures,
+    plot_evidence_ladder,
     plot_portfolio_estimability_guardrail,
 )
-from src.repo_promotion import build_promotion_plan, apply_promotion_plan
 from src.rejuvenation import annotate_effect_uncertainty
 from src.linkage_audit import audit_primate_plasma_linkage, build_estimability_report
 from src.viz import plot_mediation_effects_bar
 from src.reason_codes import (
+    AUTHOR_KEY_NOT_REQUIRED,
+    CONFIG_DISABLED,
     INSUFFICIENT_LINKED_ANIMALS,
     OMIX007582_SENTRIX_SAMPLE_SHEET_MISSING,
     PLASMA_ANIMAL_LINKAGE_COLLISION,
@@ -548,6 +549,42 @@ def test_exosome_alignment_unestimable_has_explicit_reason():
     assert "reason" in by_tissue.columns
 
 
+def test_exosome_alignment_propagates_disabled_mouse_block_reason():
+    prim = pd.DataFrame({"mean_effect": [-0.4]}, index=["Heart"])
+    prim.index.name = "tissue"
+    mouse = pd.DataFrame(
+        [
+            {
+                "tissue": "NA",
+                "contrast": "NA",
+                "mean_effect": np.nan,
+                "available": False,
+                "estimable": False,
+                "reason": "Mouse exosome block disabled by config.",
+                "reason_code": CONFIG_DISABLED,
+                "missing_author_key": AUTHOR_KEY_NOT_REQUIRED,
+            }
+        ]
+    )
+
+    by_tissue, summary = compute_exosome_alignment_tables(
+        prim,
+        mouse,
+        contrasts=["GES_vs_Veh"],
+        min_common_tissues=3,
+        n_bootstrap=10,
+        n_permutations=10,
+        random_state=1,
+    )
+
+    for output in (by_tissue, summary):
+        assert len(output) == 1
+        assert bool(output.loc[0, "estimable"]) is False
+        assert output.loc[0, "reason_code"] == CONFIG_DISABLED
+        assert output.loc[0, "missing_author_key"] == AUTHOR_KEY_NOT_REQUIRED
+        assert "disabled" in output.loc[0, "reason"].lower()
+
+
 def test_cross_species_alignment_preserves_evidence_tier():
     prim = pd.DataFrame(
         {"mean_effect": [-0.4, -0.2, 0.3]},
@@ -682,10 +719,8 @@ def test_build_default_config_supports_demo_profile():
         assert cfg.enable_subset_validation_block is False
 
 
-def test_demo_assets_manifest_covers_demo_profile_inputs():
+def test_demo_profile_inputs_are_distributed():
     repo_root = Path(__file__).resolve().parents[1]
-    assets_manifest = json.loads((repo_root / "promotion_assets_manifest.json").read_text(encoding="utf-8"))
-    asset_files = set(assets_manifest["asset_files"])
     demo_spec = PROFILE_SPECS["demo"]
     expected_assets = {
         f"data/PROCESSED/{value}"
@@ -693,9 +728,8 @@ def test_demo_assets_manifest_covers_demo_profile_inputs():
         if key.endswith(("_matrix", "_metadata")) and value
     }
 
-    assert expected_assets.issubset(asset_files)
     for rel_path in expected_assets:
-        assert (repo_root / rel_path).exists(), rel_path
+        assert (repo_root / rel_path).is_file(), rel_path
 
 
 def test_demo_methylation_asset_is_parseable_csv():
@@ -738,7 +772,7 @@ def test_optional_r_environment_spec_bootstraps_biocmanager():
 def test_public_data_ceiling_document_names_required_author_keys():
     repo_root = Path(__file__).resolve().parents[1]
     doc_text = (
-        repo_root / "Documents" / "public_data_ceiling_and_author_request.md"
+        repo_root / "Documents" / "public_data_ceiling.md"
     ).read_text(encoding="utf-8")
 
     required_terms = [
@@ -906,85 +940,6 @@ def test_load_omix_matrix_accepts_string_feature_ids():
         assert matrix.index.tolist() == ["Gene_0001", "Gene_0002"]
         assert matrix.columns.tolist() == ["s1", "s2"]
         assert float(matrix.loc["Gene_0001", "s1"]) == 1.0
-
-
-def test_repo_promotion_plan_and_apply():
-    with _workspace_tempdir() as tmpdir:
-        tmp_path = Path(tmpdir)
-        source_root = tmp_path / "source"
-        target_root = tmp_path / "target"
-        (source_root / "src").mkdir(parents=True)
-        (source_root / "data" / "PROCESSED").mkdir(parents=True)
-        (target_root / "src").mkdir(parents=True)
-        (target_root / "data" / "PROCESSED").mkdir(parents=True)
-
-        (source_root / "README.md").write_text("new readme\n", encoding="utf-8")
-        (target_root / "README.md").write_text("old readme\n", encoding="utf-8")
-        (target_root / "src" / "obsolete.py").write_text("print('obsolete')\n", encoding="utf-8")
-        (source_root / "src" / "module.py").write_text("print('hello')\n", encoding="utf-8")
-        (source_root / "data" / "PROCESSED" / "demo.csv").write_text("sample,value\ns1,1\n", encoding="utf-8")
-
-        manifest = {
-            "sync_files": ["README.md", "src/module.py"],
-            "remove_files": ["src/obsolete.py"],
-        }
-        assets_manifest = {
-            "asset_files": ["data/PROCESSED/demo.csv"],
-        }
-        plan = build_promotion_plan(
-            source_root=source_root,
-            target_root=target_root,
-            manifest=manifest,
-            assets_manifest=assets_manifest,
-            include_assets=False,
-        )
-        actions = {item.rel_path: item.action for item in plan}
-        assert actions["README.md"] == "update"
-        assert actions["src/module.py"] == "create"
-        assert actions["src/obsolete.py"] == "remove"
-        assert "data/PROCESSED/demo.csv" not in actions
-
-        counts = apply_promotion_plan(plan)
-        assert counts["update"] == 1
-        assert counts["create"] == 1
-        assert counts["remove"] == 1
-        assert (target_root / "README.md").read_text(encoding="utf-8") == "new readme\n"
-        assert (target_root / "src" / "module.py").read_text(encoding="utf-8") == "print('hello')\n"
-        assert not (target_root / "src" / "obsolete.py").exists()
-
-        asset_plan = build_promotion_plan(
-            source_root=source_root,
-            target_root=target_root,
-            manifest=manifest,
-            assets_manifest=assets_manifest,
-            include_assets=True,
-        )
-        asset_rows = {item.rel_path: item for item in asset_plan}
-        assert asset_rows["data/PROCESSED/demo.csv"].action == "create"
-        assert asset_rows["data/PROCESSED/demo.csv"].category == "demo_asset"
-
-        asset_counts = apply_promotion_plan(asset_plan)
-        assert asset_counts["create"] == 1
-        assert (target_root / "data" / "PROCESSED" / "demo.csv").read_text(encoding="utf-8") == "sample,value\ns1,1\n"
-
-        blocked_dir = target_root / "src" / "retained_directory"
-        blocked_dir.mkdir()
-        blocked_plan = build_promotion_plan(
-            source_root=source_root,
-            target_root=target_root,
-            manifest={"remove_files": ["src/retained_directory"]},
-        )
-        assert blocked_plan[0].action == "blocked_remove"
-        blocked_counts = apply_promotion_plan(blocked_plan)
-        assert blocked_counts["blocked_remove"] == 1
-        assert blocked_dir.is_dir()
-
-        with pytest.raises(ValueError, match="relative and confined"):
-            build_promotion_plan(
-                source_root=source_root,
-                target_root=target_root,
-                manifest={"remove_files": ["../outside.txt"]},
-            )
 
 
 def test_report_figure_layer_generates_manifest_and_pngs():
@@ -1398,11 +1353,17 @@ def test_report_figure_layer_generates_manifest_and_pngs():
         assert "gate=pass" in portfolio_rows.loc[
             "report_portfolio_estimability_guardrail.png", "message"
         ]
+        evidence_message = portfolio_rows.loc["report_evidence_ladder.png", "message"]
+        assert "Observed=1" in evidence_message
+        assert "Exploratory=3" in evidence_message
 
         readme_text = (Path(__file__).resolve().parents[1] / "README.md").read_text(
             encoding="utf-8"
         )
         assert readme_text.count("](docs/assets/") == 3
+        for claim_status in ("Observed", "Supported", "Exploratory", "Not estimable", "Not established"):
+            assert claim_status in readme_text
+        assert "no current mechanism-facing claim meets that threshold" in readme_text
 
 
 def test_portfolio_estimability_figure_preserves_fail_branch():
@@ -1449,4 +1410,24 @@ def test_portfolio_estimability_figure_preserves_fail_branch():
         assert record.status == "ok"
         assert "gate=fail" in record.message
         assert "mediation=blocked" in record.message
+        assert record.path.exists()
+
+
+def test_evidence_ladder_blocks_linkage_dependent_claim_when_unlinked():
+    with _workspace_tempdir() as tmpdir:
+        tmp_path = Path(tmpdir)
+        results_dir = tmp_path / "results"
+        out_dir = tmp_path / "figures"
+        results_dir.mkdir()
+        pd.DataFrame(
+            [{"protein": "POSTN", "estimable": True, "stable_association": True}]
+        ).to_csv(results_dir / "plasma_biomarkers.csv", index=False)
+        pd.DataFrame([{"tier": "unlinked"}]).to_csv(
+            results_dir / "estimability_report.csv", index=False
+        )
+
+        record = plot_evidence_ladder(results_dir, out_dir)
+
+        assert record.status == "ok"
+        assert "Not estimable=4" in record.message
         assert record.path.exists()

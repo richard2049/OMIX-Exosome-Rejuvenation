@@ -1601,13 +1601,18 @@ def run(cfg: PipelineConfig) -> None:
             prim_tissue_effects = pd.DataFrame(columns=["mean_effect", "n_treated", "n_control"])
 
     # ---- Mouse exosome mechanism-support block (OMIX009283) ----
+    mouse_block_reason = (
+        "Mouse exosome block disabled by config for this data profile."
+        if not getattr(cfg, "enable_mouse_exosome_block", False)
+        else "Mouse exosome input data unavailable."
+    )
     mouse_exosome_effects = _result_stub(
-        reason="Mouse exosome block disabled or unavailable.",
+        reason=mouse_block_reason,
         method="mouse_tissue_clock_contrast",
         extra={"tissue": "NA", "contrast": "NA", "treated_arm": "NA", "control_arm": "NA"},
     )
     mouse_signature_summary = _result_stub(
-        reason="Mouse exosome block disabled or unavailable.",
+        reason=mouse_block_reason,
         method="mouse_exosome_signature_summary",
         extra={"contrast": "NA"},
     )

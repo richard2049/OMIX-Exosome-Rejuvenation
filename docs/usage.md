@@ -89,20 +89,3 @@ conda run -n srsc-omix007582-r Rscript src/scripts/process_OMIX007582_Mammal40.R
 
 The first rebuild may cache sesame reference resources through ExperimentHub.
 Use `--max-prefixes` or `--prefixes` before attempting the complete archive.
-
-## Full-Data Development and Public Promotion
-
-The local full-data workspace and clean public repository use the same source
-code and profile interface. Promotion is manifest-driven:
-
-```bash
-python -m src.repo_promotion
-python -m src.repo_promotion --apply
-python -m src.repo_promotion --include-assets
-python -m src.repo_promotion --include-assets --apply
-```
-
-`promotion_manifest.json` controls code, documentation, tests, and environment
-files, including explicit file-only removal of obsolete public artifacts.
-`promotion_assets_manifest.json` separately controls reduced demo data. Run the
-command without `--apply` first and inspect the proposed changes.

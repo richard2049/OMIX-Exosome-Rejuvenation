@@ -882,11 +882,11 @@ def plot_mediation_uncertainty(results_dir: Path, out_dir: Path) -> FigureRecord
     _set_style()
     fig, axes = plt.subplots(1, 2, figsize=(12.4, 5.3), gridspec_kw={"width_ratios": [1.35, 1.0]})
     panels = [
-        (axes[0], finite_metrics[:3], "Direct, indirect, and total effects"),
-        (axes[1], finite_metrics[3:], "Proportion mediated"),
+        (axes[0], finite_metrics[:3], "Direct, indirect, and total effects", True),
+        (axes[1], finite_metrics[3:], "Proportion mediated", False),
     ]
     unstable_labels: list[str] = []
-    for ax, panel_metrics, title in panels:
+    for ax, panel_metrics, title, show_y_labels in panels:
         if not panel_metrics:
             ax.axis("off")
             continue
@@ -914,7 +914,11 @@ def plot_mediation_uncertainty(results_dir: Path, out_dir: Path) -> FigureRecord
                 unstable_labels.append(str(item["label"]))
         ax.axvline(0, color=INK, linewidth=1)
         ax.set_yticks(y)
-        ax.set_yticklabels([str(item["label"]) for item in panel_metrics])
+        ax.set_yticklabels(
+            [str(item["label"]) for item in panel_metrics] if show_y_labels else []
+        )
+        if not show_y_labels:
+            ax.tick_params(axis="y", length=0)
         ax.invert_yaxis()
         ax.set_title(title)
         ax.grid(axis="x", color=GRID, linewidth=0.8)
@@ -922,14 +926,15 @@ def plot_mediation_uncertainty(results_dir: Path, out_dir: Path) -> FigureRecord
         ax.spines["right"].set_visible(False)
     tier = str(row.get("tier", "unknown"))
     n_overlap = int(pd.to_numeric(pd.Series([row.get("n_overlap_animal_ids", row.get("n_used", 0))]), errors="coerce").fillna(0).iloc[0])
+    fig.subplots_adjust(top=0.78, bottom=0.15, wspace=0.24)
     fig.suptitle("Mediation Uncertainty in the Linked Subset", x=0.02, ha="left", fontsize=15, weight="bold")
     warning = (
-        "Warning: confidence intervals crossing zero indicate an estimable but unstable causal partition. "
+        "Warning: confidence intervals crossing zero indicate statistically unstable mediation estimates. "
         "The proportion-mediated estimate is especially fragile when the total effect is near zero."
         if unstable_labels
         else "No plotted confidence interval crossed zero; causal interpretation still depends on the linked-mediation assumptions."
     )
-    fig.text(0.02, 0.88, f"Gate: {tier}; linked animals: n={n_overlap}", color=MUTED, fontsize=9.2)
+    fig.text(0.02, 0.86, f"Gate: {tier}; linked animals: n={n_overlap}", color=MUTED, fontsize=9.2)
     fig.text(0.02, 0.02, warning, color=RED if unstable_labels else MUTED, fontsize=8.6)
     _save(fig, out_path)
     message = "estimable but unstable; CIs cross zero for " + ", ".join(dict.fromkeys(unstable_labels)) if unstable_labels else "estimable; CIs do not cross zero"
@@ -1431,8 +1436,8 @@ def plot_evidence_ladder(results_dir: Path, out_dir: Path) -> FigureRecord:
         rows.append(
             {
                 "level": 1,
-                "claim": "Macaque rejuvenation reproduced",
-                "status": "blocked",
+                "claim": "Macaque age and treatment-effect analysis",
+                "status": "Not estimable",
                 "detail": "No estimable tissue-level rejuvenation table.",
             }
         )
@@ -1445,23 +1450,27 @@ def plot_evidence_ladder(results_dir: Path, out_dir: Path) -> FigureRecord:
         rejuv_estimable = _add_effect_uncertainty_for_plot(rejuv_estimable, effect_col="effect")
         n_tissues = int(len(rejuv_estimable))
         n_supported = int((~rejuv_estimable["ci_crosses_zero_plot"].astype(bool)).sum())
-        status = "strong support" if n_supported >= 5 else "estimable but unstable"
         rows.append(
             {
                 "level": 1,
-                "claim": "Macaque rejuvenation reproduced",
-                "status": status,
+                "claim": "Macaque age and treatment-effect analysis",
+                "status": "Observed",
                 "detail": f"{n_tissues} estimable tissues; {n_supported} tissue CIs exclude zero. This is phenotype support, not attribution.",
             }
         )
 
-    if plasma.empty or not _bool_series(plasma, "estimable", default=False).any():
+    tier = _first_text(estimability, "tier", "unlinked")
+    if (
+        plasma.empty
+        or not _bool_series(plasma, "estimable", default=False).any()
+        or tier != "fully_linked"
+    ):
         rows.append(
             {
                 "level": 2,
-                "claim": "Linkage-supported plasma association",
-                "status": "blocked",
-                "detail": "No estimable plasma biomarker table.",
+                "claim": "Plasma association in the linked subset",
+                "status": "Not estimable",
+                "detail": f"Linked plasma association unavailable; linkage tier={tier}.",
             }
         )
     else:
@@ -1469,13 +1478,11 @@ def plot_evidence_ladder(results_dir: Path, out_dir: Path) -> FigureRecord:
         plasma_work["protein"] = plasma_work.get("protein", pd.Series("", index=plasma_work.index)).astype(str).str.strip()
         plasma_work["stable"] = _bool_series(plasma_work, "stable_association", default=False)
         n_stable_named = int((plasma_work["stable"] & plasma_work["protein"].map(_is_named_protein)).sum())
-        tier = _first_text(estimability, "tier", "unlinked")
-        status = "strong support" if n_stable_named >= 3 and tier == "fully_linked" else "estimable but unstable"
         rows.append(
             {
                 "level": 2,
-                "claim": "Linkage-supported plasma association",
-                "status": status,
+                "claim": "Plasma association in the linked subset",
+                "status": "Exploratory",
                 "detail": f"{n_stable_named} stable named proteins; linkage tier={tier}.",
             }
         )
@@ -1485,8 +1492,8 @@ def plot_evidence_ladder(results_dir: Path, out_dir: Path) -> FigureRecord:
         rows.append(
             {
                 "level": 3,
-                "claim": "Orthogonal exosome-alignment support",
-                "status": "blocked",
+                "claim": "Cross-species exosome alignment",
+                "status": "Not estimable",
                 "detail": "No estimable exosome-alignment summary.",
             }
         )
@@ -1497,12 +1504,12 @@ def plot_evidence_ladder(results_dir: Path, out_dir: Path) -> FigureRecord:
         rho_values = _numeric(alignment_estimable, "spearman_rho").dropna()
         best_rho = float(rho_values.max()) if not rho_values.empty else np.nan
         strong_alignment = n_common >= 5 and np.isfinite(best_p) and best_p < 0.05 and np.isfinite(best_rho) and best_rho > 0
-        status = "strong support" if strong_alignment else "estimable but unstable"
+        status = "Supported" if strong_alignment else "Exploratory"
         detail = f"{n_common} shared tissues; best permutation p={best_p:.3g}; best Spearman rho={best_rho:.2f}."
         rows.append(
             {
                 "level": 3,
-                "claim": "Orthogonal exosome-alignment support",
+                "claim": "Cross-species exosome alignment",
                 "status": status,
                 "detail": detail,
             }
@@ -1514,8 +1521,8 @@ def plot_evidence_ladder(results_dir: Path, out_dir: Path) -> FigureRecord:
         rows.append(
             {
                 "level": 4,
-                "claim": "Direct linked mediation",
-                "status": "blocked",
+                "claim": "Linked mediation under stated assumptions",
+                "status": "Not estimable",
                 "detail": f"Mediation not estimable; reason_code={reason}.",
             }
         )
@@ -1527,17 +1534,16 @@ def plot_evidence_ladder(results_dir: Path, out_dir: Path) -> FigureRecord:
             low, high = _parse_ci(med_row.get(col))
             if _ci_crosses_zero(low, high):
                 crossing.append(col.replace("_CI", ""))
-        status = "estimable but unstable" if crossing else "strong support"
         detail = (
-            "CIs cross zero for " + ", ".join(crossing) + "; do not interpret Level 4 as a stable causal partition."
+            "CIs cross zero for " + ", ".join(crossing) + "; the mediation result remains exploratory."
             if crossing
-            else "Linked mediation CIs do not cross zero; assumptions still require explicit review."
+            else "CIs do not cross zero, but causal assumptions still require independent support."
         )
         rows.append(
             {
                 "level": 4,
-                "claim": "Direct linked mediation",
-                "status": status,
+                "claim": "Linked mediation under stated assumptions",
+                "status": "Exploratory",
                 "detail": detail,
             }
         )
@@ -1546,15 +1552,17 @@ def plot_evidence_ladder(results_dir: Path, out_dir: Path) -> FigureRecord:
     fig, ax = plt.subplots(figsize=(13.2, 5.8))
     ax.axis("off")
     status_colors = {
-        "strong support": GREEN,
-        "estimable but unstable": AMBER,
-        "blocked": GRAY,
+        "Observed": BLUE,
+        "Supported": GREEN,
+        "Exploratory": AMBER,
+        "Not estimable": GRAY,
+        "Not established": RED,
     }
-    ax.text(0.02, 0.96, "Evidence Ladder for Interpretation-Facing Claims", transform=ax.transAxes, fontsize=15, weight="bold", color=INK)
+    ax.text(0.02, 0.96, "Design and Estimability Ladder", transform=ax.transAxes, fontsize=15, weight="bold", color=INK)
     ax.text(
         0.02,
         0.9,
-        "The ladder separates estimability from stability; higher evidence_level does not automatically mean stronger support.",
+        "Levels record design requirements reached; claim status records what the current evidence supports.",
         transform=ax.transAxes,
         fontsize=9.4,
         color=MUTED,
@@ -1581,7 +1589,7 @@ def plot_evidence_ladder(results_dir: Path, out_dir: Path) -> FigureRecord:
     ax.text(
         0.02,
         0.04,
-        "Use this ladder as a claim-control figure: unstable Level 4 outputs should be discussed as estimable sensitivity analyses, not definitive causal decomposition.",
+        "Observed does not mean statistically confirmed. Level 4 can remain exploratory when estimates are unstable or causal assumptions lack support.",
         transform=ax.transAxes,
         fontsize=8.5,
         color=MUTED,

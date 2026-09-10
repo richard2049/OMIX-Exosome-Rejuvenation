@@ -137,7 +137,7 @@ effect from a predominantly tissue-intrinsic effect with reliable precision.
 The strongest next scientific upgrade is not a more complex decomposition
 model. It is recovery of the missing sample maps and direct exosome
 cargo/donor/recipient linkage described in
-`Documents/public_data_ceiling_and_author_request.md`.
+`Documents/public_data_ceiling.md`.
 
 Until those data are available, tissue rankings, plasma associations, and
 cross-species alignment should remain uncertainty-aware prioritization tools.

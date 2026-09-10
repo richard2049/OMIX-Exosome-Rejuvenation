@@ -4,10 +4,8 @@ This note aligns article cohort labels with repository / OMIX labels as far as t
 
 ## Evidence basis
 
-- Paper:
-  - `Documents/Senescence-resistant-Human.txt`
-  - `Documents/study_sections/experimental_model.txt`
-  - `Documents/study_sections/figure_1.txt`
+- Primary publication:
+  - `https://doi.org/10.1016/j.cell.2025.05.021`
 - Repository metadata:
   - `data/RAW/data/OMIX007580-02.csv`
   - `data/RAW/data/OMIX007581-01.csv`

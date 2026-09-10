@@ -20,7 +20,7 @@ the next.
 
 ## Evidence States
 
-Use the following public and internal evidence vocabulary:
+Use the following project-wide evidence vocabulary:
 
 - **Observed** — directly estimated from the relevant dataset under the
   documented design.
