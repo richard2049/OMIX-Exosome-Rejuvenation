@@ -492,12 +492,34 @@ def compute_exosome_alignment_tables(
     prim.index = prim.index.map(lambda x: _resolve_tissue_mapping(x, None))
     prim.index.name = "primate_tissue"
 
+    mouse_estimable = (
+        mouse_effects["estimable"].astype(bool)
+        if "estimable" in mouse_effects.columns
+        else pd.Series(True, index=mouse_effects.index, dtype=bool)
+    )
+    mouse_unavailable = not mouse_estimable.any()
+    upstream_reason = ""
+    upstream_reason_code = ""
+    upstream_missing_key = ""
+    if mouse_unavailable:
+        unavailable_rows = mouse_effects.loc[~mouse_estimable]
+        if not unavailable_rows.empty:
+            first = unavailable_rows.iloc[0]
+            upstream_reason = str(first.get("reason", "")).strip()
+            upstream_reason_code = str(first.get("reason_code", "")).strip()
+            upstream_missing_key = str(first.get("missing_author_key", "")).strip()
+
     for contrast in contrasts:
         sub = mouse_effects.loc[
             (mouse_effects["contrast"] == contrast)
             & mouse_effects["estimable"].astype(bool)
         ].copy()
         if sub.empty:
+            reason = upstream_reason or f"No estimable mouse effects available for contrast {contrast}."
+            reason_fields = {
+                "reason_code": upstream_reason_code,
+                "missing_author_key": upstream_missing_key,
+            }
             summary_rows.append(
                 {
                     "contrast": contrast,
@@ -511,13 +533,39 @@ def compute_exosome_alignment_tables(
                     "preferred_alignment": "",
                     "available": False,
                     "estimable": False,
-                    "reason": f"No estimable mouse effects available for contrast {contrast}.",
+                    "reason": reason,
                     "n_used": 0,
                     "method": "cross_species_effect_alignment_summary",
                     "ci_low": np.nan,
                     "ci_high": np.nan,
                     "permutation_p_value": np.nan,
                     "evidence_level": 0,
+                    **reason_fields,
+                }
+            )
+            by_tissue_rows.append(
+                {
+                    "contrast": contrast,
+                    "mouse_tissue": "NA",
+                    "primate_tissue": "NA",
+                    "macaque_effect": np.nan,
+                    "mouse_effect": np.nan,
+                    "signed_concordance": np.nan,
+                    "rank_concordance": np.nan,
+                    "standardized_effect_similarity": np.nan,
+                    "residual_component": np.nan,
+                    "global_spearman_rho": np.nan,
+                    "global_pearson_r": np.nan,
+                    "mouse_permutation_p_value": np.nan,
+                    "available": False,
+                    "estimable": False,
+                    "reason": reason,
+                    "n_used": 0,
+                    "method": "cross_species_effect_alignment",
+                    "ci_low": np.nan,
+                    "ci_high": np.nan,
+                    "evidence_level": 0,
+                    **reason_fields,
                 }
             )
             continue

@@ -5,25 +5,28 @@ __pycache__/
 *.pyd
 .venv/
 .env/
+.pytest_cache/
+.pytest_tmp/
 
 # R
 .Rhistory
 .Rproj.user/
 .RData
 
-# Data (no version large raw datasets)
-data/raw/
-data/RAW/
-data/raw/
+# Local artifacts
 results/
 figures/
-*.idat
-*.rds
-*.log
+run.log
+.vscode/
+
+# Data (no version large raw datasets)
+data/RAW/
+data/raw/
 data/*.zip
 data/*.idat
 data/*_beta_matrix.csv
 data/*_beta_matrix_named_partial.csv
+data/PROCESSED/*.ods
 
 # Other big stuff
 *.rds

@@ -161,12 +161,8 @@ For each new analysis, ask:
 
 If the answer to any of these is no, keep the analysis exploratory or defer it.
 
-## Near-Term Priority
+## Current Evidence Boundary
 
-The next high-value implementation priority is the `OMIX009283` exosome
-alignment module, because it directly tests whether the macaque rejuvenation
-signature is concordant with an independent exosome-relevant intervention.
-
-The next high-value documentation and collaboration priority is the author
-metadata request defined in
-`Documents/public_data_ceiling_and_author_request.md`.
+The remaining evidence upgrades and their required metadata are documented in
+`Documents/public_data_ceiling.md`. Until those requirements are met, new
+mechanism-facing analyses should remain explicitly exploratory.

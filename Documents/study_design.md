@@ -1,12 +1,13 @@
 # Study Design
 
-This file summarizes the study design using the paper text now extracted locally plus the repository metadata files. It keeps explicit status labels and does not fill gaps by guesswork.
+This file summarizes the study design from the primary publication, public
+database records, and released metadata. It keeps explicit status labels and
+does not fill gaps by guesswork.
 
 ## Sources consulted
 
-- Primary study paper:
-  - `Documents/Senescence-resistant-Human.pdf`
-  - `Documents/Senescence-resistant-Human.txt`
+- Primary study publication:
+  - `https://doi.org/10.1016/j.cell.2025.05.021`
 - Working label legend:
   - `Documents/group_label_crosswalk.md`
 - Public database records:
@@ -27,7 +28,7 @@ This file summarizes the study design using the paper text now extracted locally
 
 ## Source reliability note
 
-- `reported`: The paper is now text-readable in this repo via `Documents/Senescence-resistant-Human.txt`.
+- `reported`: Directly stated in the primary publication or released metadata.
 - `conflicting`: The article uses `WTC` and `SRC` terminology, while OMIX/repo metadata often use `WT` and `GES`. Public BioProject naming improves this mapping substantially, but the labels are still not text-identical across sources.
 - `unknown`: If a detail is not in the extracted paper text or metadata files, it remains unknown here.
 

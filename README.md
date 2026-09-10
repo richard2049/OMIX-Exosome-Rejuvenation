@@ -25,17 +25,25 @@ intended claim.
 
 ## Evidence at a Glance
 
-This table separates analysis availability from evidentiary strength in the
-current full-data run:
+This table separates analysis availability, design level, and the scientific
+status of each claim in the current full-data run:
 
-| Evidence layer | Question | Current status |
-|---|---|---|
-| Macaque transcriptomics | Do treated tissues show younger-like transcriptomic age? | Clock evaluated by grouped cross-validation (`n = 61`; Spearman `r = 0.89`; MAE `= 2.65` years). All 39 tissue-effect CIs cross zero. |
-| Plasma proteomics | Is the circulating protein state associated with age or intervention? | Analyzed as exploratory association; 24 of 32 plasma samples have high-confidence animal links. |
-| Macaque methylation | Is there independent epigenetic evidence of rejuvenation? | Biological validation is not estimable because the Mammal40 technical-to-biological sample map is unavailable. |
-| Macaque-mouse exosome alignment | Are macaque tissue effects concordant with mouse exosome perturbations? | Four shared tissues; directional agreement is limited and permutation tests are not significant. Orthogonal, non-causal evidence only. |
-| Plasma-tissue mediation | Can a linked plasma state statistically mediate the transcriptomic response? | The linkage gate passes on 24 animals, but all four mediation-effect CIs cross zero; estimable but unstable. |
-| Causal attribution | Did exosomes cause the macaque rejuvenation response? | Not established by the public study design or available metadata. |
+| Evidence layer | Question | Claim status | Current result |
+|---|---|---|---|
+| Transcriptomic age model | Does tissue expression predict chronological age? | **Observed** | Grouped cross-validation across 61 animals gives Spearman `r = 0.89` and MAE `= 2.65` years. |
+| Tissue treatment effects | Do treated tissues show younger-like transcriptomic age? | **Observed** | Effects are estimated in 39 tissues, but every confidence interval crosses zero. |
+| Plasma proteomics | Is the circulating protein state associated with age or intervention? | **Exploratory** | Twenty-four of 32 plasma samples have high-confidence animal links; associations remain hypothesis-generating. |
+| Macaque methylation | Is there independent epigenetic evidence of rejuvenation? | **Not estimable** | The Mammal40 technical-to-biological sample map is unavailable. |
+| Macaque-mouse exosome alignment | Are macaque tissue effects concordant with mouse exosome perturbations? | **Exploratory** | Four shared tissues show limited directional agreement; permutation tests are not significant. |
+| Plasma-tissue mediation | Can a linked plasma state statistically mediate the transcriptomic response? | **Exploratory** | The gate passes on 24 animals, but all four mediation-effect confidence intervals cross zero. |
+| Causal attribution | Did exosomes cause the macaque rejuvenation response? | **Not established** | The public design lacks direct exosome exposure or cargo-to-recipient outcome linkage. |
+
+`Observed` means directly estimated, not necessarily statistically supported.
+`Supported` is reserved for a claim strengthened by concordant orthogonal
+evidence; no current mechanism-facing claim meets that threshold.
+`Exploratory` marks hypothesis-generating evidence. `Not estimable` identifies
+a missing design or data requirement, whereas `Not established` means the
+available analysis does not justify the requested mechanistic conclusion.
 
 The defensible conclusion is not a numeric exosome-versus-cellular partition.
 The public data currently support reproduction, guarded association, and
@@ -67,11 +75,13 @@ The workflow combines scientific analysis with explicit estimability controls:
 - A report layer that converts machine-readable result tables into
   interpretation-facing figures without recomputing the analysis.
 
-| Level | Interpretation | Current design state |
+### Design and Estimability Ladder
+
+| Level | Design requirement reached | Current design state |
 |---|---|---|
 | 0 | Not estimable | Methylation biological validation |
-| 1 | Macaque rejuvenation reproduced | Estimable, tissue effects uncertain |
-| 2 | Linkage-supported plasma association | Estimable on 24 linked animals; small cohort |
+| 1 | Macaque age and treatment-effect analysis | Estimable, tissue effects uncertain |
+| 2 | Plasma association with valid animal linkage | Estimable on 24 linked animals; small cohort |
 | 3 | Orthogonal exosome-alignment analysis | Design rung reached; no stable alignment support (`n = 4`) |
 | 4 | Linked mediation estimable under stated assumptions | Estimable but unstable; not a causal partition |
 
@@ -190,12 +200,12 @@ Key reading paths:
 - [Result and figure reference](docs/output_reference.md)
 - [Scientific objectives and claim rules](Documents/scientific_objectives_and_decision_framework.md)
 - [Study design](Documents/study_design.md)
-- [Public-data ceiling and author metadata request](Documents/public_data_ceiling_and_author_request.md)
+- [Public-data limitations and evidence ceiling](Documents/public_data_ceiling.md)
 - [Mammal40 sample-map audit](Documents/OMIX007582_sample_map_audit.md)
 - [PBMC single-cell audit](Documents/OMIX009284_audit.md)
 
 Questions, reproducibility problems, and metadata corrections can be reported
-through [GitHub Issues](https://github.com/richard2049/OMIX-Exosome-Rejuvenation/issues).
+through [GitHub Issues](https://github.com/richard2049/Omix-exosome-rejuvenation/issues).
 
 ## Citation and License
 

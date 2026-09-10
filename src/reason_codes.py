@@ -162,7 +162,12 @@ def infer_reason_code(
         return PLASMA_BULK_ANIMAL_LINKAGE_MISSING
     if "common tissues" in text or "shared tissue" in text or "overlapping tissues" in text:
         return INSUFFICIENT_SHARED_TISSUE_OVERLAP
-    if "too few samples" in text or "insufficient samples" in text or "min_per_group" in text:
+    if (
+        "too few samples" in text
+        or "insufficient samples" in text
+        or "insufficient reference samples" in text
+        or "min_per_group" in text
+    ):
         return INSUFFICIENT_GROUP_SAMPLE_SIZE
     if (
         "unavailable" in text
@@ -175,7 +180,7 @@ def infer_reason_code(
         return SUBSET_PSEUDOBULK_NOT_IMPLEMENTED
     if "must contain" in text or "column missing" in text or "schema" in text:
         return SCHEMA_REQUIREMENT_MISSING
-    if "not estimable" in text or "no sensitivity analyses" in text:
+    if "not estimable" in text or "no estimable" in text or "no sensitivity analyses" in text:
         return NO_ESTIMABLE_FEATURES
     if "failed" in text:
         return METHOD_RUNTIME_FAILURE
