@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines which conclusions can be supported by the public OMIX
+This page defines which conclusions can be supported by the public OMIX
 data used in this repository and which require additional metadata or new
 experimental evidence. Its purpose is to prevent additional model complexity
 from being mistaken for stronger biological identification.

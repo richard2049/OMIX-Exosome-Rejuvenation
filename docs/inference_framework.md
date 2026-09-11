@@ -1,8 +1,8 @@
-# OMIX Scientific Inference and Estimability Contract
+# Scientific Inference and Estimability Framework
 
 ## Purpose
 
-This document defines the evidence requirements that govern linkage-dependent,
+This framework defines the evidence requirements that govern linkage-dependent,
 mediation, exosome-related, and cross-species claims in the OMIX primate
 rejuvenation project.
 
@@ -35,7 +35,7 @@ Use the following project-wide evidence vocabulary:
 
 ---
 
-## 1. Linkage Contract
+## 1. Linkage Requirements
 
 ### Question
 Can measurements from different modalities be assigned to the same biological
@@ -78,7 +78,7 @@ Unresolved samples remain unresolved.
 
 ---
 
-## 2. Estimability Contract
+## 2. Estimability Criteria
 
 ### Principle
 
@@ -112,7 +112,7 @@ Canonical artifact:
 
 ---
 
-## 3. Mediation Contract
+## 3. Mediation Requirements
 
 ### Required causal structure
 
@@ -152,7 +152,7 @@ the causal assumptions needed for mechanistic attribution.
 
 ---
 
-## 4. Exosome-Causality Contract
+## 4. Exosome-Causality Boundaries
 
 Distinguish four levels:
 
@@ -187,7 +187,7 @@ decomposition becomes estimable.
 
 ---
 
-## 5. Cross-Species Evidence Contract
+## 5. Cross-Species Evidence Rules
 
 ### Purpose
 

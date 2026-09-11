@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This note records what can be mapped defensibly between the public `OMIX007582`
+This audit records what can be mapped defensibly between the public `OMIX007582`
 Mammal40 methylation files shipped in this repository and what remains
 unrecoverable without inventing assumptions.
 

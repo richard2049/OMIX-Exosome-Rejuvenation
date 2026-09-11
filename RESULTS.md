@@ -127,8 +127,8 @@ does not resolve cross-tissue exosome attribution. It remains a candidate for a
 separate immune-cell-state analysis.
 
 Sources: `results/multimodal_concordance_summary.csv`,
-`Documents/OMIX007582_sample_map_audit.md`, and
-`Documents/OMIX009284_audit.md`.
+`docs/OMIX007582_sample_map_audit.md`, and
+`docs/OMIX009284_audit.md`.
 
 ## Bottom Line
 
@@ -137,7 +137,7 @@ effect from a predominantly tissue-intrinsic effect with reliable precision.
 The strongest next scientific upgrade is not a more complex decomposition
 model. It is recovery of the missing sample maps and direct exosome
 cargo/donor/recipient linkage described in
-`Documents/public_data_ceiling.md`.
+`docs/scientific_limitations.md`.
 
 Until those data are available, tissue rankings, plasma associations, and
 cross-species alignment should remain uncertainty-aware prioritization tools.

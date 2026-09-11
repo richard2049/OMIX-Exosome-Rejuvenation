@@ -164,5 +164,5 @@ If the answer to any of these is no, keep the analysis exploratory or defer it.
 ## Current Evidence Boundary
 
 The remaining evidence upgrades and their required metadata are documented in
-`Documents/public_data_ceiling.md`. Until those requirements are met, new
+`docs/scientific_limitations.md`. Until those requirements are met, new
 mechanism-facing analyses should remain explicitly exploratory.

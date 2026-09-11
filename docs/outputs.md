@@ -1,7 +1,20 @@
-# Output Reference
+# Outputs
 
 The pipeline writes machine-readable analysis tables to `results/`, diagnostic
 plots to `figures/`, and interpretation-facing plots to `figures/report/`.
+
+## Output Families
+
+| Family | Main purpose | Start with |
+|---|---|---|
+| Clock | Evaluate chronological-age prediction under animal-grouped validation | `clock_metrics_primates.csv` |
+| Rejuvenation | Estimate uncertainty-aware tissue treatment effects | `rejuvenation_by_tissue.csv` |
+| Multimodal validation | Assess orthogonal methylation and cross-species alignment evidence | `multimodal_concordance_summary.csv`; `exosome_alignment_summary.csv` |
+| Linkage and estimability | Establish whether animal-level cross-modal analyses may be interpreted | `estimability_report.csv`; `linkage_qc_report.csv` |
+| Sensitivity | Test dependence on control definitions and feature thresholds | `sensitivity_summary.csv` |
+
+The sections below provide the complete file-level reference. These families
+organize outputs by scientific question; they are not evidence-strength ranks.
 
 ## Primary Scientific Outputs
 
@@ -88,7 +101,7 @@ Three report figures are curated separately for the public README:
 | Asset | Source tables | Interpretation boundary |
 |---|---|---|
 | `docs/assets/aging_rejuvenation_signal.png` | `clock_metrics_primates.csv`; `rejuvenation_by_tissue.csv` | Grouped clock validation plus nominal tissue prioritization; not confirmed tissue effects |
-| `docs/assets/multimodal_evidence_architecture.png` | Rejuvenation, linkage, alignment, and multimodal status tables | Status-aware evidence map; not a pooled multimodal effect |
+| `docs/assets/multimodal_evidence_architecture.png` | Rejuvenation, linkage, alignment, and multimodal status tables | Modality-to-analysis flow with estimability gates; not a pooled multimodal effect |
 | `docs/assets/estimability_guardrail.png` | `linkage_qc_report.csv`; `estimability_report.csv`; `mediation_summary.csv` | A passed gate means estimable, not causally established |
 
 These tracked images are release snapshots. Regenerate them from reviewed
