@@ -1,6 +1,7 @@
 # Group Label Crosswalk
 
-This note aligns article cohort labels with repository / OMIX labels as far as the currently observable evidence supports.
+This note aligns article cohort labels with repository and OMIX labels as far
+as the currently observable evidence supports.
 
 ## Evidence basis
 

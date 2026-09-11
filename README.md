@@ -118,12 +118,14 @@ Result CSVs                 -> interpretation-facing report figures
 
 ![Status-aware multimodal evidence architecture](docs/assets/multimodal_evidence_architecture.png)
 
-*Figure 2. Modalities contribute different forms of evidence. Mammal40
-methylation remains blocked by missing sample identity, and mouse evidence is
-orthogonal mechanism support rather than direct macaque validation.*
+*Figure 2. Each modality follows a distinct analysis path before contributing
+to interpretation. Estimability gates block unsupported transitions;
+Mammal40 methylation remains unavailable for biological validation, and mouse
+alignment remains exploratory rather than direct macaque validation.*
 
 Group-label interpretation follows
-[the canonical crosswalk](Documents/group_label_crosswalk.md). Raw inputs are
+[the canonical crosswalk](docs/group_label_crosswalk.md). A modality-by-modality
+summary is available in the [dataset guide](docs/datasets.md). Raw inputs are
 treated as immutable; derived tables and figures are written to `results/` and
 `figures/`.
 
@@ -149,7 +151,7 @@ criteria, permitting animal-level mediation. The estimates remain unstable;
 the alternative branch shows the structured output written when the gate
 fails.*
 
-See the [scientific inference and estimability contract](Documents/inference_contract.md)
+See the [scientific inference and estimability framework](docs/inference_framework.md)
 for the complete claim rules.
 
 ## Reproduce the Analysis
@@ -179,7 +181,7 @@ python -m src.report_figures
 
 The full OMIX datasets are not redistributed here. Demo and full runs share the
 same entry point and output schemas, but reduced demo data may produce different
-estimability levels. See the [usage guide](docs/usage.md) for setup, profiles,
+estimability levels. See the [reproducibility guide](docs/reproducibility.md) for setup, profiles,
 input expectations, and the optional R/Bioconductor workflow.
 
 ## Repository and Documentation
@@ -190,19 +192,14 @@ input expectations, and the optional R/Bioconductor workflow.
 | `tests/` | Automated scientific guardrails and smoke tests |
 | `data/PROCESSED/` | Reduced example inputs for the demo profile |
 | `results/`, `figures/` | Generated machine-readable outputs and figures |
-| `docs/` | Public usage and output-reference documentation |
-| `Documents/` | Study design, inference contracts, audits, and scientific decision records |
+| `docs/` | Study context, evidence rules, dataset audits, reproducibility, and output reference |
 
 Key reading paths:
 
 - [Scientific results and interpretation](RESULTS.md)
-- [Setup, profiles, and reproducible execution](docs/usage.md)
-- [Result and figure reference](docs/output_reference.md)
-- [Scientific objectives and claim rules](Documents/scientific_objectives_and_decision_framework.md)
-- [Study design](Documents/study_design.md)
-- [Public-data limitations and evidence ceiling](Documents/public_data_ceiling.md)
-- [Mammal40 sample-map audit](Documents/OMIX007582_sample_map_audit.md)
-- [PBMC single-cell audit](Documents/OMIX009284_audit.md)
+- [Documentation index](docs/README.md)
+- [Setup and reproducible execution](docs/reproducibility.md)
+- [Output and figure reference](docs/outputs.md)
 
 Questions, reproducibility problems, and metadata corrections can be reported
 through [GitHub Issues](https://github.com/richard2049/Omix-exosome-rejuvenation/issues).

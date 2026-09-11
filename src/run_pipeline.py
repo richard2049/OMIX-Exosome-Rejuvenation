@@ -704,7 +704,7 @@ def _map_plasma_sample_to_bulk_animal_id(sample_id: str) -> Tuple[Optional[str],
     Conservative, deterministic mapping from OMIX007581-style plasma sample IDs
     to OMIX007580 bulk animal IDs.
 
-    Group-name semantics are documented in `Documents/group_label_crosswalk.md`.
+    Group-name semantics are documented in `docs/group_label_crosswalk.md`.
     In brief: public OMIX/BioProject naming strongly supports `V -> O_V`,
     `WT -> O_WT`, and `GES -> O_GES`, but those remain cross-source mappings
     rather than verbatim article labels.
@@ -997,7 +997,7 @@ def load_methylation_block(cfg: PipelineConfig) -> Tuple[Optional[pd.DataFrame],
       if mapping is incomplete or ambiguous.
     - The public files bundled in this repo currently expose technical matrix IDs
       without a defensible biological sample key; see
-      `Documents/OMIX007582_sample_map_audit.md`.
+      `docs/OMIX007582_sample_map_audit.md`.
     """
     try:
         meth_meta = load_omix_metadata(cfg.primate_methylation.metadata)

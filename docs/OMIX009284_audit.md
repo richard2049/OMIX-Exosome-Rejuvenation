@@ -2,7 +2,7 @@
 
 ## Scope
 
-This audit documents what can be established from the released `OMIX009284`
+This audit records what can be established from the released `OMIX009284`
 files without modifying raw data or integrating the dataset into the canonical
 pipeline.
 

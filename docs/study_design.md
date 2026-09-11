@@ -9,7 +9,7 @@ does not fill gaps by guesswork.
 - Primary study publication:
   - `https://doi.org/10.1016/j.cell.2025.05.021`
 - Working label legend:
-  - `Documents/group_label_crosswalk.md`
+  - `docs/group_label_crosswalk.md`
 - Public database records:
   - `https://ngdc.cncb.ac.cn/bioproject/browse/PRJCA030875`
   - `https://www.sciencedirect.com/science/article/abs/pii/S0092867425005719`
@@ -92,7 +92,7 @@ does not fill gaps by guesswork.
 
 ### Working article-to-repo crosswalk
 
-Use `Documents/group_label_crosswalk.md` as the operational label legend.
+Use `docs/group_label_crosswalk.md` as the operational label legend.
 
 Current best-supported mapping:
 
@@ -180,7 +180,7 @@ The paper does not present one single `n` for every assay. Sample size varies by
 1. `SRC` in the paper and `GES` in OMIX/repo metadata are strongly supported across paper, OMIX, BioProject, and `OMIX007586` subset metadata, but the label translation is still cross-source and not written as a single canonical legend in the article PDF.
 2. `WTC` in the paper and `WT` in OMIX/repo metadata are strongly supported across paper, OMIX, BioProject, and `OMIX007586` subset metadata, but the names are still not text-identical.
 3. `O_V` is now strongly supported as the old vehicle/saline control arm by paper, BioProject, and `OMIX007586` subset metadata, but this conclusion is still assembled across sources rather than stated as a single glossary item in the paper text.
-4. `data/RAW/data/OMIX007582-02.csv` and `data/RAW/data/OMIX007582_beta_matrix.csv` still have a `620` vs `643` sample-accounting mismatch. See `Documents/OMIX007582_sample_map_audit.md`.
+4. `data/RAW/data/OMIX007582-02.csv` and `data/RAW/data/OMIX007582_beta_matrix.csv` still have a `620` vs `643` sample-accounting mismatch. See `docs/OMIX007582_sample_map_audit.md`.
 5. `data/RAW/data/OMIX007580-02.csv` contains one anomalous `orig.ident` value, `58-MF-C-Trachea`, that should be audited before treating the file as perfectly clean metadata.
 6. Some page-1 / page-2 text in the extracted article still contains publisher-layout artifacts; section-level extraction is therefore preferable to naive whole-file reading.
 
@@ -190,7 +190,7 @@ The paper does not present one single `n` for every assay. Sample size varies by
 2. The repo should continue to separate:
    - reproduced study-aligned analyses, and
    - exploratory causal decomposition layers that go beyond what the paper directly reports.
-3. Use `Documents/group_label_crosswalk.md` when translating article cohort names into repo group names.
+3. Use `docs/group_label_crosswalk.md` when translating article cohort names into repo group names.
 4. Any claim equating repo `O_GES` directly with article `A4-SRC`, or repo `O_V` with article `A4-Ctrl`, should still be phrased as a cross-source mapping rather than a verbatim article label substitution.
 
 ## Inference Structure
@@ -203,7 +203,7 @@ quantities are estimable.
 Analyses involving cross-modality linkage, mediation, exosome attribution, or
 cross-species mechanistic support are governed by:
 
-[`Documents/inference_contract.md`](inference_contract.md)
+[`docs/inference_framework.md`](inference_framework.md)
 
 In particular:
 

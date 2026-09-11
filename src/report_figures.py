@@ -1944,7 +1944,17 @@ def plot_portfolio_multimodal_evidence(
 
     linkage_row = linkage.iloc[0] if not linkage.empty else pd.Series(dtype=object)
     n_plasma = int(pd.to_numeric(pd.Series([linkage_row.get("n_plasma_total")]), errors="coerce").fillna(0).iloc[0])
-    n_linked = int(pd.to_numeric(pd.Series([linkage_row.get("n_mapped_high_conf")]), errors="coerce").fillna(0).iloc[0])
+    n_valid_links = int(
+        pd.to_numeric(
+            pd.Series([linkage_row.get("n_mapped_valid_in_bulk")]),
+            errors="coerce",
+        )
+        .fillna(0)
+        .iloc[0]
+    )
+    linkage_estimable = bool(
+        _bool_series(linkage, "estimable", default=False).any()
+    )
 
     alignment_rows = (
         alignment.loc[_bool_series(alignment, "estimable", default=False)].copy()
@@ -1960,11 +1970,13 @@ def plot_portfolio_multimodal_evidence(
         if not multimodal.empty
         else False
     )
-    methylation_reason = _first_text(
-        multimodal,
-        "reason_code",
-        "DATA_FILE_UNAVAILABLE",
-    )
+    transcript_available = not rejuv_rows.empty
+    plasma_available = linkage_estimable and n_valid_links > 0
+    alignment_available = not alignment_rows.empty
+    transcript_status = "Observed" if transcript_available else "Not estimable"
+    plasma_status = "Exploratory" if plasma_available else "Not estimable"
+    alignment_status = "Exploratory" if alignment_available else "Not estimable"
+    methylation_status = "Exploratory" if methylation_estimable else "Not estimable"
 
     _set_style()
     fig, ax = plt.subplots(figsize=(13.2, 7.2))
@@ -1972,7 +1984,7 @@ def plot_portfolio_multimodal_evidence(
     ax.text(
         0.03,
         0.95,
-        "Status-Aware Multimodal Evidence Architecture",
+        "Multimodal Pipeline and Evidence Architecture",
         transform=ax.transAxes,
         fontsize=16,
         weight="bold",
@@ -1981,109 +1993,178 @@ def plot_portfolio_multimodal_evidence(
     ax.text(
         0.03,
         0.89,
-        "Modalities contribute different evidence types; they are not pooled into one causal effect.",
+        "Each modality follows its own analysis path; estimability gates control downstream interpretation.",
         transform=ax.transAxes,
         fontsize=9.5,
         color=MUTED,
     )
+    column_labels = (
+        (0.03, "Public data"),
+        (0.31, "Analysis path"),
+        (0.73, "Evidence status"),
+    )
+    for x, label in column_labels:
+        ax.text(
+            x,
+            0.82,
+            label,
+            transform=ax.transAxes,
+            fontsize=9.2,
+            weight="bold",
+            color=MUTED,
+        )
+
+    rows = (0.64, 0.47, 0.30, 0.13)
+    input_cards = (
+        (
+            "Bulk RNA-seq",
+            "OMIX007580\nMacaque tissues",
+            AMBER if transcript_available else GRAY,
+            "white" if transcript_available else "#f1f5f9",
+        ),
+        (
+            "Plasma proteomics",
+            "OMIX007581\nMacaque plasma",
+            AMBER if plasma_available else GRAY,
+            "white" if plasma_available else "#f1f5f9",
+        ),
+        (
+            "Mammal40 methylation",
+            "OMIX007582\nTechnical IDs + beta values",
+            GREEN if methylation_estimable else GRAY,
+            "white" if methylation_estimable else "#f1f5f9",
+        ),
+        (
+            "Mouse exosome data",
+            "OMIX009283\nTissue perturbation",
+            AMBER if alignment_available else GRAY,
+            "white" if alignment_available else "#f1f5f9",
+        ),
+    )
+    analysis_cards = (
+        (
+            "Aging and tissue effects",
+            "Grouped CV -> clock -> delta_age\n"
+            f"-> tissue effects ({len(rejuv_rows)} tissues; {n_supported} CIs exclude zero)",
+            AMBER if transcript_available else GRAY,
+            "white" if transcript_available else "#f1f5f9",
+        ),
+        (
+            "Biomarkers and linkage",
+            "Protein ranking -> aging axis -> linkage\n"
+            + (
+                f"Gate passed: {n_valid_links}/{n_plasma} valid animal links"
+                if plasma_available
+                else f"Gate blocked: {n_valid_links}/{n_plasma} valid cross-modal links"
+            ),
+            AMBER if plasma_available else GRAY,
+            "white" if plasma_available else "#f1f5f9",
+        ),
+        (
+            "Orthogonal validation",
+            "Sample-map gate -> DNAmAge concordance\n"
+            + (
+                "Biological mapping available"
+                if methylation_estimable
+                else "Blocked: biological map unavailable"
+            ),
+            GREEN if methylation_estimable else GRAY,
+            "white" if methylation_estimable else "#f1f5f9",
+        ),
+        (
+            "Cross-species alignment",
+            "Arm contrasts -> tissue matching -> alignment\n"
+            + (
+                f"{n_common} tissues; best permutation p={best_p:.3f}"
+                if np.isfinite(best_p)
+                else f"{n_common} shared tissues"
+            ),
+            AMBER if alignment_available else GRAY,
+            "white" if alignment_available else "#f1f5f9",
+        ),
+    )
+
+    for y, input_card, analysis_card in zip(rows, input_cards, analysis_cards):
+        in_title, in_body, in_color, in_face = input_card
+        analysis_title, analysis_body, analysis_color, analysis_face = analysis_card
+        _draw_card(
+            ax,
+            x=0.03,
+            y=y,
+            width=0.20,
+            height=0.14,
+            title=in_title,
+            body=in_body,
+            edge_color=in_color,
+            face_color=in_face,
+            body_offset=0.092,
+        )
+        _draw_card(
+            ax,
+            x=0.31,
+            y=y,
+            width=0.34,
+            height=0.14,
+            title=analysis_title,
+            body=analysis_body,
+            edge_color=analysis_color,
+            face_color=analysis_face,
+            body_offset=0.092,
+        )
+        linestyle = "--" if analysis_color == GRAY else "-"
+        _draw_arrow(
+            ax,
+            (0.235, y + 0.07),
+            (0.298, y + 0.07),
+            color=analysis_color,
+            linestyle=linestyle,
+        )
+        _draw_arrow(
+            ax,
+            (0.655, y + 0.07),
+            (0.718, y + 0.07),
+            color=analysis_color,
+            linestyle=linestyle,
+        )
 
     _draw_card(
         ax,
-        x=0.03,
-        y=0.68,
-        width=0.53,
-        height=0.15,
-        title="Macaque transcriptomics | L1",
-        body=f"{len(rejuv_rows)} tissues estimable; {n_supported} CIs exclude zero | phenotype-level evidence",
-        edge_color=AMBER,
-        body_offset=0.105,
-    )
-    _draw_card(
-        ax,
-        x=0.03,
-        y=0.49,
-        width=0.53,
-        height=0.15,
-        title="Macaque plasma proteomics | L2",
-        body=f"{n_plasma} plasma samples; {n_linked} high-confidence links | association evidence only",
-        edge_color=AMBER,
-        body_offset=0.105,
-    )
-    _draw_card(
-        ax,
-        x=0.03,
-        y=0.30,
-        width=0.53,
-        height=0.15,
-        title="Mammal40 methylation | L0",
+        x=0.73,
+        y=0.13,
+        width=0.24,
+        height=0.65,
+        title="Current interpretation",
         body=(
-            "Biological validation estimable"
-            if methylation_estimable
-            else f"Blocked: {_display_reason_code(methylation_reason)} | no inferred sample identities"
-        ),
-        edge_color=GREEN if methylation_estimable else GRAY,
-        face_color="white" if methylation_estimable else "#f1f5f9",
-        body_offset=0.105,
-    )
-    _draw_card(
-        ax,
-        x=0.03,
-        y=0.11,
-        width=0.53,
-        height=0.15,
-        title="Mouse exosome perturbation | L3",
-        body=(
-            f"{n_common} shared tissues; best permutation p={best_p:.3f} | orthogonal mechanism support"
-            if np.isfinite(best_p)
-            else f"{n_common} shared tissues | orthogonal mechanism support"
-        ),
-        edge_color=AMBER if not alignment_rows.empty else GRAY,
-        body_offset=0.105,
-    )
-    _draw_card(
-        ax,
-        x=0.68,
-        y=0.29,
-        width=0.29,
-        height=0.42,
-        title="Evidence synthesis",
-        body=(
-            "Reproduced age-associated signal\n"
-            "+ linked plasma association\n"
-            "+ limited cross-species support\n\n"
-            "No stable causal partition"
+            f"{transcript_status}\nTranscriptomic age and tissue effects\n\n"
+            f"{plasma_status}\nPlasma-to-tissue association\n\n"
+            f"{alignment_status}\nCross-species alignment\n\n"
+            f"{methylation_status}\nMethylation concordance\n\n"
+            "Not established\nExosome causal attribution"
         ),
         edge_color=INK,
         face_color="white",
         body_color=INK,
+        body_offset=0.095,
     )
-    _draw_arrow(ax, (0.565, 0.755), (0.675, 0.59), color=AMBER)
-    _draw_arrow(ax, (0.565, 0.565), (0.675, 0.54), color=AMBER)
-    _draw_arrow(
-        ax,
-        (0.565, 0.375),
-        (0.675, 0.49),
-        color=GREEN if methylation_estimable else GRAY,
-        linestyle="--",
-    )
-    _draw_arrow(ax, (0.565, 0.185), (0.675, 0.44), color=AMBER, linestyle="--")
     ax.text(
         0.03,
         0.035,
-        "Solid paths: primary macaque evidence. Dashed paths: orthogonal or currently blocked evidence. "
-        "This diagram is a status map, not a multimodal concordance estimate.",
+        "Solid paths are available in this run; dashed paths are blocked by an estimability gate. "
+        "Evidence streams remain separate and are not pooled into one causal effect.",
         transform=ax.transAxes,
         fontsize=8.8,
         color=MUTED,
     )
     _save(fig, out_path)
-    methylation_status = "estimable" if methylation_estimable else "blocked"
+    methylation_run_status = "estimable" if methylation_estimable else "blocked"
     return FigureRecord(
         out_path.name,
         out_path,
         source,
         "ok",
-        f"transcriptomic tissues={len(rejuv_rows)}; plasma linked={n_linked}; methylation={methylation_status}; shared tissues={n_common}",
+        f"transcriptomic tissues={len(rejuv_rows)}; "
+        f"plasma gate={'pass' if plasma_available else 'blocked'}; valid links={n_valid_links}; "
+        f"methylation={methylation_run_status}; shared tissues={n_common}",
     )
 
 

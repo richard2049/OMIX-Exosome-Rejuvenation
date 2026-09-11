@@ -1,4 +1,4 @@
-# Setup and Reproducible Execution
+# Reproducibility
 
 ## Environment
 
@@ -89,3 +89,37 @@ conda run -n srsc-omix007582-r Rscript src/scripts/process_OMIX007582_Mammal40.R
 
 The first rebuild may cache sesame reference resources through ExperimentHub.
 Use `--max-prefixes` or `--prefixes` before attempting the complete archive.
+
+## Troubleshooting
+
+### The full profile cannot find source files
+
+The public repository contains reduced examples, not the full OMIX downloads.
+Use `--profile demo` to verify the installation, or place independently
+downloaded source files under the configured full-data root and use
+`--profile full`. Do not rename samples or edit raw files to satisfy a loader.
+
+### A linkage-dependent result is not estimable
+
+Inspect `results/plasma_to_animal_map.csv`, `results/linkage_qc_report.csv`,
+`results/linkage_audit.csv`, and `results/estimability_report.csv`. A structured
+stub is expected when identity, confidence, collision, or sample-support rules
+fail; it is not a pipeline crash.
+
+### Methylation validation remains blocked
+
+`OMIX007582` requires a defensible Sentrix technical-to-biological sample map.
+Rebuilding beta values from IDAT files does not recover that missing identity.
+See the [sample-map audit](OMIX007582_sample_map_audit.md).
+
+### R packages are unavailable
+
+The optional Mammal40 workflow is not required for the Python demo. Install
+the Bioconductor packages shown above or use the isolated R environment. Test
+one prefix before processing the complete archive.
+
+### Report figures show status panels
+
+The report layer visualizes structured non-estimable outputs rather than
+inventing estimates. Read `figures/report/report_figure_manifest.csv` for each
+figure's source tables and status message.

@@ -7,7 +7,7 @@ tables, not assembled manually and not selected from the diagnostic plot set.
 | Figure | Source tables | Scientific boundary |
 |---|---|---|
 | `aging_rejuvenation_signal.png` | `clock_metrics_primates.csv`; `rejuvenation_by_tissue.csv` | Shows grouped clock validation and uncertainty-aware tissue prioritization; it does not establish tissue-specific rejuvenation |
-| `multimodal_evidence_architecture.png` | `rejuvenation_by_tissue.csv`; `linkage_qc_report.csv`; `exosome_alignment_summary.csv`; `multimodal_concordance_summary.csv` | Shows which evidence streams are available or blocked; it is not a pooled concordance estimate |
+| `multimodal_evidence_architecture.png` | `rejuvenation_by_tissue.csv`; `linkage_qc_report.csv`; `exosome_alignment_summary.csv`; `multimodal_concordance_summary.csv` | Shows modality-specific analysis paths, estimability gates, and current evidence status; it is not a pooled concordance estimate |
 | `estimability_guardrail.png` | `linkage_qc_report.csv`; `estimability_report.csv`; `mediation_summary.csv` | Shows whether mediation may be estimated and how failure is reported; gate passage does not establish causality |
 
 Regenerate both the complete report layer and these public snapshots with:

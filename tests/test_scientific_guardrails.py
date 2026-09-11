@@ -27,6 +27,7 @@ from src.report_figures import (
     generate_report_figures,
     plot_evidence_ladder,
     plot_portfolio_estimability_guardrail,
+    plot_portfolio_multimodal_evidence,
 )
 from src.rejuvenation import annotate_effect_uncertainty
 from src.linkage_audit import audit_primate_plasma_linkage, build_estimability_report
@@ -771,9 +772,9 @@ def test_optional_r_environment_spec_bootstraps_biocmanager():
 
 def test_public_data_ceiling_document_names_required_author_keys():
     repo_root = Path(__file__).resolve().parents[1]
-    doc_text = (
-        repo_root / "Documents" / "public_data_ceiling.md"
-    ).read_text(encoding="utf-8")
+    doc_text = (repo_root / "docs" / "scientific_limitations.md").read_text(
+        encoding="utf-8"
+    )
 
     required_terms = [
         "plasma proteomics",
@@ -865,9 +866,9 @@ def test_plasma_axis_delta_age_correlation_uses_high_confidence_links_only():
 
 def test_scientific_objectives_document_separates_replication_from_claims():
     repo_root = Path(__file__).resolve().parents[1]
-    doc_text = (
-        repo_root / "Documents" / "scientific_objectives_and_decision_framework.md"
-    ).read_text(encoding="utf-8")
+    doc_text = (repo_root / "docs" / "scientific_scope.md").read_text(
+        encoding="utf-8"
+    )
 
     required_terms = [
         "not only a reproduction",
@@ -1430,4 +1431,32 @@ def test_evidence_ladder_blocks_linkage_dependent_claim_when_unlinked():
 
         assert record.status == "ok"
         assert "Not estimable=4" in record.message
+        assert record.path.exists()
+
+
+def test_multimodal_figure_does_not_treat_candidate_mappings_as_valid_linkage():
+    with _workspace_tempdir() as tmpdir:
+        tmp_path = Path(tmpdir)
+        results_dir = tmp_path / "results"
+        out_dir = tmp_path / "figures"
+        results_dir.mkdir()
+        pd.DataFrame(
+            [{"tissue": "Liver", "estimable": True, "ci_low": -1.0, "ci_high": 1.0}]
+        ).to_csv(results_dir / "rejuvenation_by_tissue.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "n_plasma_total": 32,
+                    "n_mapped_high_conf": 24,
+                    "n_mapped_valid_in_bulk": 0,
+                    "estimable": False,
+                }
+            ]
+        ).to_csv(results_dir / "linkage_qc_report.csv", index=False)
+
+        record = plot_portfolio_multimodal_evidence(results_dir, out_dir)
+
+        assert record.status == "ok"
+        assert "plasma gate=blocked" in record.message
+        assert "valid links=0" in record.message
         assert record.path.exists()
